@@ -12,6 +12,16 @@ export function createNotificationWorker(pools: DbPools, config: ApiConfig, send
     return result.rowCount ?? 0;
   }
 
+  async function recordHeartbeat(error?: unknown, status: 'active'|'error'|'no_credential' = error ? 'error' : 'active') {
+    const message = error instanceof Error ? error.message.slice(0, 500) : error ? String(error).slice(0, 500) : null;
+    await pools.worker.query(`INSERT INTO app.worker_heartbeats(worker_name,status,last_tick_at,last_success_at,last_error_at,last_error,updated_at)
+      VALUES ('notifications',$2,now(),CASE WHEN $1::text IS NULL AND $2='active' THEN now() ELSE NULL END,CASE WHEN $1::text IS NULL THEN NULL ELSE now() END,$1,now())
+      ON CONFLICT (worker_name) DO UPDATE SET status=$2,last_tick_at=now(),
+        last_success_at=CASE WHEN $1::text IS NULL THEN now() ELSE app.worker_heartbeats.last_success_at END,
+        last_error_at=CASE WHEN $1::text IS NULL THEN app.worker_heartbeats.last_error_at ELSE now() END,
+        last_error=CASE WHEN $1::text IS NULL THEN NULL ELSE $1 END,updated_at=now()`, [message,status]);
+  }
+
   async function processBatch() {
     const client = await pools.worker.connect();
     try {
@@ -64,9 +74,16 @@ export function createNotificationWorker(pools: DbPools, config: ApiConfig, send
   async function cleanupOrphans() {
     const expiredLocations = await pools.worker.query(`DELETE FROM app.delivery_route_locations
       WHERE captured_at < now() - interval '30 days'`);
+    const expiredPhotos = await pools.worker.query<{ storage_key: string }>(
+      'SELECT storage_key FROM app.expired_delivery_photo_keys()');
+    if (expiredPhotos.rows.length) await pools.worker.query(
+      'DELETE FROM app.delivery_photos WHERE storage_key = ANY($1::text[])',
+      [expiredPhotos.rows.map(row => row.storage_key)]);
+    const expiredEvents = await pools.worker.query<{ id: string }>('SELECT id FROM app.purge_expired_delivery_events()');
     const result = await pools.worker.query<{ storage_key: string }>('SELECT storage_key FROM app.delivery_photos');
     const referenced = new Set(result.rows.map(row => row.storage_key));
-    let removed = 0;
+    let removed = (expiredPhotos.rowCount ?? 0) + (expiredEvents.rowCount ?? 0);
+    for (const row of expiredPhotos.rows) await unlink(join(config.fileStorageDir,row.storage_key)).catch(() => undefined);
     for await (const path of files(config.fileStorageDir)) {
       const key = relative(config.fileStorageDir,path).replaceAll('\\','/');
       if (referenced.has(key)) continue;
@@ -78,5 +95,5 @@ export function createNotificationWorker(pools: DbPools, config: ApiConfig, send
     return removed + (expiredLocations.rowCount ?? 0);
   }
 
-  return { recoverStale,processBatch,cleanupOrphans };
+  return { recoverStale,processBatch,cleanupOrphans,recordHeartbeat };
 }

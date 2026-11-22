@@ -1,13 +1,13 @@
 {
   "name": "@entregas/mobile",
-  "version": "0.1.0",
+  "version": "1.0.0-beta.1",
   "private": true,
   "main": "expo-router/entry",
   "scripts": {
     "start": "expo start",
     "android": "expo run:android",
     "prebuild:android": "expo prebuild --platform android --no-install",
-    "build:android:release": "expo prebuild --platform android --no-install && cd android && ./gradlew app:assembleRelease",
+    "build:android:release": "../../scripts/check-android-release-env.sh && expo prebuild --platform android --no-install && cd android && ./gradlew app:assembleRelease -PRELEASE_STORE_FILE=\"$RELEASE_STORE_FILE\" -PRELEASE_STORE_PASSWORD=\"$RELEASE_STORE_PASSWORD\" -PRELEASE_KEY_ALIAS=\"$RELEASE_KEY_ALIAS\" -PRELEASE_KEY_PASSWORD=\"$RELEASE_KEY_PASSWORD\"",
     "typecheck": "tsc --noEmit",
     "ios": "expo run:ios",
     "test": "node --import tsx --test test/*.test.ts"

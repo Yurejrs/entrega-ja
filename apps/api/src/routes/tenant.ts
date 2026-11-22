@@ -26,7 +26,7 @@ async function geocodeAddress(address: { street: string; number?: string; neighb
   const query = [address.street, address.number, address.neighborhood, address.city, address.state, address.postalCode, 'Brasil'].filter(Boolean).join(', ');
   try {
     const response = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(query)}`, {
-      headers: { 'User-Agent': 'EntregaJa/0.1 (address geocoding; support@entregaja.app)', 'Accept-Language': 'pt-BR' }, signal: AbortSignal.timeout(8000),
+      headers: { 'User-Agent': 'EntregaJa/1.0.0 (address geocoding; support@entregaja.app)', 'Accept-Language': 'pt-BR' }, signal: AbortSignal.timeout(8000),
     });
     if (!response.ok) return null;
     const rows = await response.json() as Array<{ lat?: string; lon?: string }>;
@@ -54,10 +54,10 @@ export function registerTenantRoutes(app: FastifyInstance, pools: DbPools, confi
   });
   app.post('/v1/tenant/localities/import', {schema:{tags:['tenant'],body:{type:'object',required:['location','radiusM'],properties:{location:{type:'string',minLength:3,maxLength:200},radiusM:{type:'integer',minimum:500,maximum:5000}},additionalProperties:false}}},async request=>{
     const identity=await admin(request,pools);const {location,radiusM}=request.body as {location:string;radiusM:number};
-    let geo:Response;try{geo=await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(location)}`,{headers:{'User-Agent':'EntregaJa/0.1 (locality catalog; support@entregaja.app)','Accept-Language':'pt-BR'},signal:AbortSignal.timeout(15000)});}catch{throw new ApiError(502,'MAP_PROVIDER_UNAVAILABLE','Não foi possível consultar o OpenStreetMap agora');}
+    let geo:Response;try{geo=await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(location)}`,{headers:{'User-Agent':'EntregaJa/1.0.0 (locality catalog; support@entregaja.app)','Accept-Language':'pt-BR'},signal:AbortSignal.timeout(15000)});}catch{throw new ApiError(502,'MAP_PROVIDER_UNAVAILABLE','Não foi possível consultar o OpenStreetMap agora');}
     if(!geo.ok)throw new ApiError(502,'MAP_PROVIDER_UNAVAILABLE','Serviço de geocodificação indisponível');const matches=await geo.json() as Array<{lat:string;lon:string}>;if(!matches.length)badRequest('Localidade não encontrada; informe cidade e estado');
     const lat=Number(matches[0]!.lat),lon=Number(matches[0]!.lon);const query=`[out:json][timeout:25];(way(around:${radiusM},${lat},${lon})[highway][name];node(around:${radiusM},${lat},${lon})[place];way(around:${radiusM},${lat},${lon})[place];);out center tags;`;
-    const response=await fetch('https://overpass-api.de/api/interpreter',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','User-Agent':'EntregaJa/0.1 (locality catalog; support@entregaja.app)'},body:new URLSearchParams({data:query}),signal:AbortSignal.timeout(35000)});
+      const response=await fetch('https://overpass-api.de/api/interpreter',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','User-Agent':'EntregaJa/1.0.0 (locality catalog; support@entregaja.app)'},body:new URLSearchParams({data:query}),signal:AbortSignal.timeout(35000)});
     if(!response.ok)throw new ApiError(502,'MAP_PROVIDER_UNAVAILABLE','Serviço OpenStreetMap temporariamente indisponível');const data=await response.json() as {elements?:unknown[]};const places=parseOverpass(data.elements??[]);
     const saved=await withTenant(pools,identity,async client=>{await client.query(`INSERT INTO app.tenant_operating_areas(tenant_id,location_query,center_latitude,center_longitude,radius_m,imported_at) VALUES(app.current_tenant_id(),$1,$2,$3,$4,now()) ON CONFLICT(tenant_id) DO UPDATE SET location_query=EXCLUDED.location_query,center_latitude=EXCLUDED.center_latitude,center_longitude=EXCLUDED.center_longitude,radius_m=EXCLUDED.radius_m,imported_at=now()`,[location,lat,lon,radiusM]);await client.query('DELETE FROM app.tenant_localities');if(places.length)await client.query(`INSERT INTO app.tenant_localities(tenant_id,source_element,category,name,latitude,longitude) SELECT app.current_tenant_id(),x.source_element,x.category,x.name,x.latitude,x.longitude FROM jsonb_to_recordset($1::jsonb) AS x(source_element text,category text,name text,latitude numeric,longitude numeric) ON CONFLICT(tenant_id,source_element) DO UPDATE SET category=EXCLUDED.category,name=EXCLUDED.name,latitude=EXCLUDED.latitude,longitude=EXCLUDED.longitude,imported_at=now()`,[JSON.stringify(places)]);return places.length;});
     return {imported:saved,location,radiusM,attribution:'© OpenStreetMap contributors'};
@@ -199,14 +199,22 @@ export function registerTenantRoutes(app: FastifyInstance, pools: DbPools, confi
         FROM app.deliveries GROUP BY status`);
       const unseen = await client.query<{ count: string }>(`SELECT count(*)::text AS count FROM app.deliveries
         WHERE courier_membership_id IS NOT NULL AND viewed_at IS NULL AND status NOT IN ('completed','cancelled')`);
+      const workerHeartbeat = await client.query<{ status: 'active'|'error'|'no_credential'; last_tick_at: string; last_success_at: string | null; last_error_at: string | null; last_error: string | null }>(
+        `SELECT status,last_tick_at,last_success_at,last_error_at,last_error FROM app.worker_heartbeats WHERE worker_name='notifications'`);
+      const workerQueue = await client.query<{ count: string }>(`SELECT count(*)::text AS count FROM app.notification_outbox WHERE status IN ('pending','processing')`);
+      const heartbeat = workerHeartbeat.rows[0];
+      const heartbeatAge = heartbeat ? Date.now() - new Date(heartbeat.last_tick_at).getTime() : Infinity;
+      const workerStatus = !heartbeat ? 'no_heartbeat' : heartbeatAge > 10 * 60 * 1000 ? 'stopped' : heartbeat.status;
       const liveCouriers = await client.query(`SELECT r.id AS route_id,r.courier_membership_id,m.user_id,u.full_name,
-          last.latitude,last.longitude,last.received_at
+          last.latitude,last.longitude,last.received_at,
+          CASE WHEN last.received_at IS NULL THEN 'no_signal'
+            WHEN last.received_at < now()-interval '90 seconds' THEN 'stale' ELSE 'ok' END AS gps_status
         FROM app.delivery_routes r
         JOIN app.tenant_memberships m ON m.id=r.courier_membership_id
         JOIN app.users u ON u.id=m.user_id
         LEFT JOIN LATERAL (SELECT latitude,longitude,received_at FROM app.delivery_route_locations l
-          WHERE l.route_id=r.id ORDER BY l.received_at DESC LIMIT 1) last ON true
-        WHERE r.status='active' ORDER BY u.full_name`);
+          WHERE l.route_id=r.id AND l.accuracy_m<=$1 ORDER BY l.received_at DESC LIMIT 1) last ON true
+        WHERE r.status='active' ORDER BY u.full_name`,[config.gpsLowPrecisionThresholdM]);
       const summary = await client.query<{ day: string; week: string; month: string }>(`WITH clock AS (
           SELECT (now() AT TIME ZONE 'America/Fortaleza')::date AS today,
             date_trunc('week',now() AT TIME ZONE 'America/Fortaleza')::date AS week_start,
@@ -245,7 +253,8 @@ export function registerTenantRoutes(app: FastifyInstance, pools: DbPools, confi
       return { byStatus: Object.fromEntries(counts.rows.map(row => [row.status,Number(row.count)])),
         unseen: Number(unseen.rows[0]!.count),
         summary: Object.fromEntries(Object.entries(summary.rows[0]!).map(([key,value]) => [key,Number(value)])),
-        series: { period, items: series.rows }, liveCouriers: liveCouriers.rows };
+        series: { period, items: series.rows }, liveCouriers: liveCouriers.rows,
+        worker: { status: workerStatus, lastTickAt: heartbeat?.last_tick_at ?? null, lastSuccessAt: heartbeat?.last_success_at ?? null, lastError: heartbeat?.last_error ?? null, pending: Number(workerQueue.rows[0]!.count) } };
     });
   });
 
@@ -265,8 +274,8 @@ export function registerTenantRoutes(app: FastifyInstance, pools: DbPools, confi
     return withTenant(pools,identity,async client=>(await client.query(`SELECT (d.destination_snapshot->>'reference_latitude')::numeric AS latitude,(d.destination_snapshot->>'reference_longitude')::numeric AS longitude,count(*)::int AS weight FROM app.deliveries d WHERE d.status='completed' AND ($1::date IS NULL OR (d.completed_at AT TIME ZONE 'America/Fortaleza')::date >= $1::date) AND ($2::date IS NULL OR (d.completed_at AT TIME ZONE 'America/Fortaleza')::date <= $2::date) AND d.destination_snapshot->>'reference_latitude' IS NOT NULL AND d.destination_snapshot->>'reference_longitude' IS NOT NULL GROUP BY 1,2 ORDER BY weight DESC LIMIT 1000`,[q.from??null,q.to??null])).rows);
   });
 
-  app.get('/v1/tenant/customers', { schema: { tags: ['tenant'], querystring: { type: 'object',
-    properties: { cursor: uuid, limit: { type: 'integer', minimum: 1, maximum: 100 }, search: { type: 'string' } } } } }, async request => {
+  app.get('/v1/tenant/customers', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } }, schema: { tags: ['tenant'], querystring: { type: 'object',
+    properties: { cursor: uuid, limit: { type: 'integer', minimum: 1, maximum: 100 }, search: { type: 'string', maxLength: 200 } } } } }, async request => {
     const identity = await admin(request, pools);
     const query = request.query as { cursor?: string; limit?: number; search?: string };
     return withTenant(pools, identity, async client => {

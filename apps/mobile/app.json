@@ -3,7 +3,7 @@
     "name": "Entrega Já",
     "slug": "entrega-ja",
     "scheme": "entregaja",
-    "version": "0.1.21",
+    "version": "1.0.0-beta.1",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "android": {
@@ -14,7 +14,7 @@
         "ACCESS_FINE_LOCATION",
         "POST_NOTIFICATIONS"
       ],
-      "versionCode": 22,
+      "versionCode": 23,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-foreground.png",
         "backgroundColor": "#0F4C5C"
@@ -31,7 +31,7 @@
         "expo-build-properties",
         {
           "android": {
-            "usesCleartextTraffic": true
+            "usesCleartextTraffic": false
           }
         }
       ]

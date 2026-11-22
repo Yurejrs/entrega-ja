@@ -15,6 +15,8 @@ Primeira versão do banco PostgreSQL para o SaaS multiempresa descrito no docume
 - `migrations/0028` e `0029`: reconciliação idempotente da política histórica da 0027 e invalidação transacional dos avisos de oferta quando um entregador aceita.
 - `migrations/0030`: configuração de gamificação por empresa, medalhas, progresso por entregador, motivos de problema e desafios com bônus, todos protegidos por RLS.
 - `migrations/0031`: valor estimado da entrega para métricas e ganhos do entregador.
+- `migrations/0032` e `0033`: conclusão de problemas permitida com foto e heartbeat do worker de notificações.
+- `migrations/0034`: aceite versionado da política de localização por entregador e empresa.
 - `tests/002_fixture.sql` e `tests/003_runtime.sql`: cenários com login real de API, sem privilégios de proprietário.
 
 ## Desenvolvimento local
@@ -27,7 +29,7 @@ Use `./db/manage.sh up`, `./db/manage.sh migrate`, `./db/manage.sh api-roles` e 
 
 Para desenvolvimento e testes locais, use `db/manage.sh`, que sobe o PostgreSQL 17, aplica migrações em ordem e registra cada migração com SHA-256 em `public.schema_migrations`. Em um ambiente gerenciado, aplique os mesmos arquivos em ordem com `psql -v ON_ERROR_STOP=1 -f arquivo.sql`. A conta de migração precisa criar a extensão `pgcrypto`, o schema e o papel `app_runtime`. Crie uma conta de login da API e conceda a ela `app_runtime`; essa conta não pode ser superusuária, proprietária das tabelas nem ter `BYPASSRLS`.
 
-Em toda operação autenticada, a API deve abrir uma transação, autenticar o usuário e chamar `app.set_request_context(user_id, membership_id)` usando IDs derivados da sessão autenticada. A função confere vínculo ativo, usuário habilitado e empresa ativa, então define os quatro parâmetros de contexto com escopo local à transação. As políticas RLS conferem novamente essa consistência. A API deve usar consultas parametrizadas e encerrar a transação antes de devolver a conexão ao pool. Os IDs não podem vir diretamente do corpo da requisição. A função não substitui autenticação: um cliente com execução arbitrária de SQL ainda poderia tentar apresentar IDs de outra pessoa.
+Em toda operação autenticada, a API deve abrir uma transação, autenticar o usuário e chamar `app.set_request_context(user_id, membership_id)` usando IDs derivados da sessão autenticada. A função confere vínculo ativo, usuário habilitado e empresa ativa, então define os quatro parâmetros de contexto com escopo local à transação. As políticas RLS conferem novamente essa consistência, inclusive em rotas, paradas e pontos GPS. A API deve usar consultas parametrizadas e encerrar a transação antes de devolver a conexão ao pool. Os IDs não podem vir diretamente do corpo da requisição. A função não substitui autenticação: um cliente com execução arbitrária de SQL ainda poderia tentar apresentar IDs de outra pessoa.
 
 Criação e reatribuição de entrega devem usar uma única transação para alterar `deliveries`, inserir `delivery_events` e inserir uma linha de `notification_outbox` por dispositivo ativo com token FCM. Se qualquer passo falhar, a API deve desfazer a transação inteira. Ao criar uma entrega sem dispositivo registrado, não há destinatário para a outbox; o aplicativo encontra a entrega na próxima sincronização. Os testes cobrem gravação conjunta, reatribuição, destino da notificação e rollback. A API deve continuar validando as transições de estado.
 
@@ -43,4 +45,4 @@ O papel `app_runtime` cobre os fluxos operacionais. Provisionamento de empresas,
 
 ## Itens antes de um piloto comercial
 
-Ainda precisam ser definidos a regra de check-in por distância, políticas gerais de retenção e exclusão de dados e os preços comerciais. A trilha de localização é mantida por 30 dias. A validação de backup e restauração de banco e fotos deve ser feita no ambiente que receberá o piloto. Esses itens não substituem a validação operacional e de segurança antes de disponibilizar a primeira versão aos usuários.
+A regra de check-in por distância e os preços comerciais ainda dependem de decisão do piloto. A política de retenção, exclusão e recuperação está documentada em `docs/privacidade-retencao.md`; a trilha de localização é mantida por 30 dias. A validação real de backup e restauração de banco e fotos ainda deve ser feita no ambiente que receberá o piloto.

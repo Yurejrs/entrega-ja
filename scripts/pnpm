@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${NODE26_BIN:?Defina NODE26_BIN apontando para o executável Node 26}"
+: "${PNPM_MJS:?Defina PNPM_MJS apontando para pnpm.mjs 11}"
+exec "$NODE26_BIN" "$PNPM_MJS" "$@"

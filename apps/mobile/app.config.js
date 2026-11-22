@@ -6,6 +6,10 @@ const googleServicesPath = path.join(__dirname, 'google-services.json');
 module.exports = {
   expo: {
     ...appConfig,
+    extra: {
+      ...appConfig.extra,
+      ...(process.env.EXPO_PUBLIC_API_URL ? { apiUrl: process.env.EXPO_PUBLIC_API_URL.replace(/\/$/, '') } : {}),
+    },
     android: {
       ...appConfig.android,
       ...(fs.existsSync(googleServicesPath)

@@ -17,9 +17,15 @@ async function tenantIdentity(request: FastifyRequest, pools: DbPools): Promise<
 }
 function requireAdmin(identity: Identity): void { if (identity.role !== 'admin') forbidden(); }
 function requireCourier(identity: Identity): void { if (identity.role !== 'courier') forbidden(); }
+function distanceMeters(latitudeA: number, longitudeA: number, latitudeB: number, longitudeB: number): number {
+  const radians = (value: number) => value * Math.PI / 180;
+  const dLat = radians(latitudeB - latitudeA), dLon = radians(longitudeB - longitudeA);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(radians(latitudeA)) * Math.cos(radians(latitudeB)) * Math.sin(dLon / 2) ** 2;
+  return 6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
 async function geocodeInlineAddress(address: {street:string;number?:string;neighborhood?:string;city:string;state:string;postalCode?:string}) {
   const query=[address.street,address.number,address.neighborhood,address.city,address.state,address.postalCode,'Brasil'].filter(Boolean).join(', ');
-  try { const response=await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(query)}`,{headers:{'User-Agent':'EntregaJa/0.1 (delivery address geocoding; support@entregaja.app)','Accept-Language':'pt-BR'},signal:AbortSignal.timeout(8000)}); if(!response.ok)return null; const rows=await response.json() as Array<{lat?:string;lon?:string}>; const latitude=Number(rows[0]?.lat),longitude=Number(rows[0]?.lon); return Number.isFinite(latitude)&&Number.isFinite(longitude)?{latitude,longitude}:null; } catch { return null; }
+  try { const response=await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(query)}`,{headers:{'User-Agent':'EntregaJa/1.0.0 (delivery address geocoding; support@entregaja.app)','Accept-Language':'pt-BR'},signal:AbortSignal.timeout(8000)}); if(!response.ok)return null; const rows=await response.json() as Array<{lat?:string;lon?:string}>; const latitude=Number(rows[0]?.lat),longitude=Number(rows[0]?.lon); return Number.isFinite(latitude)&&Number.isFinite(longitude)?{latitude,longitude}:null; } catch { return null; }
 }
 
 async function outbox(client: PoolClient, deliveryId: string, courierMembershipId: string, eventType: 'delivery_assigned' | 'delivery_reassigned') {
@@ -336,6 +342,14 @@ export function registerDeliveryRoutes(app: FastifyInstance, pools: DbPools, con
       const delivery = await deliveryForUpdate(client,id);
       if (delivery.courier_membership_id !== identity.membershipId) notFound();
       if (!['assigned','in_progress','problem'].includes(delivery.status)) conflict('Entrega não permite check-in');
+      const address = await client.query<{ reference_latitude: number | null; reference_longitude: number | null }>(
+        'SELECT reference_latitude,reference_longitude FROM app.addresses WHERE id=$1 AND customer_id=$2', [delivery.address_id, delivery.customer_id]);
+      const reference = address.rows[0];
+      if (reference?.reference_latitude !== null && reference?.reference_latitude !== undefined && reference.reference_longitude !== null && reference.reference_longitude !== undefined) {
+        const maxDistance = config?.checkInMaxDistanceM ?? 200;
+        const distance = distanceMeters(b.latitude, b.longitude, Number(reference.reference_latitude), Number(reference.reference_longitude));
+        if (distance > maxDistance) badRequest(`Você está a aproximadamente ${Math.round(distance)} m do endereço. O limite para check-in é ${Math.round(maxDistance)} m.`);
+      }
       const inserted = await client.query<{ id: string }>(`INSERT INTO app.delivery_events
         (tenant_id,delivery_id,actor_membership_id,kind,occurred_at,latitude,longitude,gps_accuracy_m,note,client_operation_id,metadata)
         VALUES (app.current_tenant_id(),$1,$2,'check_in',$3,$4,$5,$6,$7,$8,jsonb_build_object('request_hash',$9::text)) RETURNING id`,
@@ -376,7 +390,7 @@ export function registerDeliveryRoutes(app: FastifyInstance, pools: DbPools, con
     });
   });
 
-  app.post('/v1/deliveries/:id/photos', { schema: { tags: ['mobile'], params: { type: 'object', required: ['id'], properties: { id: uuid } } } }, async request => {
+  app.post('/v1/deliveries/:id/photos', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } }, schema: { tags: ['mobile'], params: { type: 'object', required: ['id'], properties: { id: uuid } } } }, async request => {
     const identity=await tenantIdentity(request,pools); requireCourier(identity); if(!config) badRequest('Fotos indisponíveis');
     const {id}=request.params as {id:string}; const fields:Record<string,string>={}; let photo:Buffer|null=null; let mime='';
     for await(const part of request.parts()){if(part.type==='file'){if(part.fieldname!=='photo'||photo)badRequest('Foto inválida');mime=part.mimetype;photo=await part.toBuffer();}else fields[part.fieldname]=String(part.value);}
@@ -412,7 +426,7 @@ export function registerDeliveryRoutes(app: FastifyInstance, pools: DbPools, con
     });
   });
 
-  app.post('/v1/deliveries/:id/problem-report', { schema: { tags: ['mobile'], params: { type: 'object', required: ['id'], properties: { id: uuid } } } }, async request => {
+  app.post('/v1/deliveries/:id/problem-report', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } }, schema: { tags: ['mobile'], params: { type: 'object', required: ['id'], properties: { id: uuid } } } }, async request => {
     const identity = await tenantIdentity(request, pools); requireCourier(identity);
     if (!config) badRequest('Relatório de problema indisponível');
     const { id } = request.params as { id: string };

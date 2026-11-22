@@ -1,11 +1,11 @@
-# Teste no Android — Entrega Já 0.1.21
+# Homologação do Android — Entrega Já 1.0.0-beta.1
 
 ## Preparação
 
-1. Instale `releases/entrega-ja-android-v0.1.21-teste.apk` por cima da versão anterior.
+1. Instale o APK release `releases/entrega-ja-android-v1.0.0-beta.1.apk` por cima da versão anterior. O arquivo precisa estar assinado com a keystore de produção; builds de debug não atendem ao aceite da release.
 2. Conecte o celular à mesma rede do computador. No navegador do celular, abra `http://10.10.0.40:3000/health/ready`; o resultado esperado é `{"status":"ok"}`. Se o IP do computador mudar, abra **Configurações** no app e atualize a URL da API.
 3. Entre com a conta de entregador de QA preparada para o teste, abra a aba **Entregas** e deslize a lista para baixo para atualizar.
-4. Abra **Teste Android 0.1.9 — operações offline**. A entrega está atribuída à conta de QA e usa o endereço de demonstração, com referência geográfica configurada.
+4. Abra a entrega de QA preparada para o teste de operações offline. Ela usa o endereço de demonstração, com referência geográfica configurada.
 5. Confira rua, número, bairro, cidade e UF. A prévia do OpenStreetMap deve mostrar o ponto de entrega cadastrado; toque no mapa para abrir o local em outro aplicativo de mapas.
 6. A galeria deve informar que ainda não há fotos nessa nova entrega.
 
@@ -22,14 +22,14 @@
 ## Rota com GPS em segundo plano
 
 1. Na Gestão Web, deixe ao menos duas entregas abertas atribuídas ao entregador de QA. Sincronize no Android.
-2. No APK v0.1.21, em **Entregas → Em aberto**, toque em **Montar rota**. O app mostra instruções; toque nos cartões na ordem desejada. As paradas ficam numeradas e destacadas; toque de novo para remover uma parada. O gesto de manter pressionado também inicia a seleção.
+2. No APK v1.0.0-beta.1, em **Entregas → Em aberto**, toque em **Montar rota**. O app mostra instruções; toque nos cartões na ordem desejada. As paradas ficam numeradas e destacadas; toque de novo para remover uma parada. O gesto de manter pressionado também inicia a seleção.
 3. O botão **Iniciar rota** informa a quantidade selecionada. Use **Cancelar montagem da rota** para sair sem iniciar.
 4. Toque em **Iniciar rota** e conceda localização durante o uso e em segundo plano. O Android deve manter a notificação **Rota em andamento** enquanto a rota estiver ativa.
 5. Com a rota em andamento, bloqueie a tela e caminhe alguns minutos. Desbloqueie, volte ao app e sincronize; na Gestão Web, abra uma das entregas da rota e confirme que o acompanhamento mostra a posição/trilha mais recente.
 6. Conclua a primeira parada com check-in e foto. A rota deve avançar para a próxima entrega; ao concluir a última, o app deve encerrar o acompanhamento GPS.
 7. Para testar fila GPS offline, inicie outra rota, desligue a rede por alguns minutos enquanto se desloca e reconecte. Depois de abrir o app e atualizar a lista, confirme que os pontos armazenados no aparelho aparecem no acompanhamento da rota na Gestão Web.
 
-O GPS em segundo plano e o push remoto ainda precisam de validação em aparelho físico. Esta build é assinada com chave de depuração e inclui a configuração cliente do Firebase para `com.kynesis.entregaja`; para validar notificações com o app fechado, configure `FCM_PROJECT_ID`, a credencial privada do Firebase Admin e mantenha o worker ativo. Com o app aberto, a verificação periódica pode mostrar aviso local.
+O GPS em segundo plano e o push remoto ainda precisam de validação em aparelho físico. Para validar notificações com o app fechado, configure `FCM_PROJECT_ID`, a credencial privada do Firebase Admin e mantenha o worker ativo. Com o app aberto, a verificação periódica pode mostrar aviso local.
 
 ## Entrega disponível para retirada
 

@@ -11,6 +11,7 @@ export type ApiError = Error & { status?: number; code?: string };
 
 let csrfToken: string | null = null;
 let unauthorizedHandler: (() => void) | null = null;
+export let latestDashboardData: unknown = null;
 
 export function setUnauthorizedHandler(handler: (() => void) | null): void {
   unauthorizedHandler = handler;
@@ -53,7 +54,12 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     },
   });
   if (!response.ok) throw await responseError(response);
-  return response.json() as Promise<T>;
+  const body = await response.json() as T;
+  if (path.startsWith('/tenant/dashboard') && typeof window !== 'undefined') {
+    latestDashboardData = body;
+    window.dispatchEvent(new CustomEvent('entregaja:dashboard-data', { detail: body }));
+  }
+  return body;
 }
 
 export async function login(email: string, password: string, scope: 'tenant' | 'platform') {

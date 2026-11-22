@@ -21,6 +21,8 @@ SELECT app.set_request_context('10000000-0000-0000-0000-000000000002', '20000000
 DO $$ BEGIN
   IF (SELECT count(*) FROM app.deliveries) <> 1 THEN RAISE EXCEPTION 'courier sees wrong deliveries'; END IF;
   IF (SELECT count(*) FROM app.customers) <> 1 THEN RAISE EXCEPTION 'courier sees wrong customers'; END IF;
+  IF (SELECT count(*) FROM app.delivery_routes) <> 1 OR (SELECT count(*) FROM app.delivery_route_locations) <> 1
+    THEN RAISE EXCEPTION 'courier sees wrong route locations'; END IF;
   BEGIN
     INSERT INTO app.customers(tenant_id, name) VALUES ('00000000-0000-0000-0000-000000000001', 'Forbidden');
     RAISE EXCEPTION 'courier inserted customer';
@@ -35,9 +37,15 @@ BEGIN;
 SELECT app.set_request_context('10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001');
 DO $$ DECLARE affected integer; BEGIN
   IF (SELECT count(*) FROM app.deliveries) <> 2 THEN RAISE EXCEPTION 'admin A sees wrong deliveries'; END IF;
+  IF (SELECT count(*) FROM app.delivery_routes) <> 1 OR (SELECT count(*) FROM app.delivery_route_locations) <> 1
+    THEN RAISE EXCEPTION 'admin A sees wrong routes or locations'; END IF;
   UPDATE app.deliveries SET status = 'cancelled' WHERE id = '50000000-0000-0000-0000-000000000002';
   GET DIAGNOSTICS affected = ROW_COUNT;
   IF affected <> 0 THEN RAISE EXCEPTION 'cross-tenant update succeeded'; END IF;
+  UPDATE app.delivery_route_locations SET accuracy_m = 1
+    WHERE client_point_id = '91000000-0000-0000-0000-000000000002';
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  IF affected <> 0 THEN RAISE EXCEPTION 'cross-tenant location update succeeded'; END IF;
   BEGIN
     INSERT INTO app.customers(tenant_id, name) VALUES ('00000000-0000-0000-0000-000000000002', 'Forbidden');
     RAISE EXCEPTION 'cross-tenant insert succeeded';

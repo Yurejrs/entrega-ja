@@ -19,6 +19,7 @@ import { deliveryStatusLabel } from '../../src/status';
 import { mapCoordinates, previewTiles } from '../../src/map-tiles';
 import { Icon } from '../../src/design-system';
 import { canComplete } from '../../src/delivery-detail-flow';
+import { distanceMeters } from '../../src/geo';
 
 type OperationKind = 'check_in' | 'problem' | 'completion' | 'photo' | 'note';
 function VolumeIcon() { return <Icon name="box" size={16}/>; }
@@ -51,7 +52,7 @@ function OSMMapPreview({
       <View style={[detailStyles.map, { width, height }]}>
         {tiles.map(tile => <Image
           key={tile.key}
-          source={{ uri: tile.url, headers: { 'User-Agent': 'EntregaJa-Android/0.1.14 (map preview)' } }}
+          source={{ uri: tile.url, headers: { 'User-Agent': 'EntregaJa-Android/1.0.0 (map preview)' } }}
           style={{ position: 'absolute', left: tile.left, top: tile.top, width: 256, height: 256 }}
           onLoad={() => setLoadedTiles(count => count + 1)}
           onError={() => setFailedTiles(count => count + 1)}
@@ -76,6 +77,7 @@ export default function Detail() {
   const [savedNote, setSavedNote] = useState('');
   const [toast, setToast] = useState('');
   const [gpsError, setGpsError] = useState('');
+  const [checkInDistanceM, setCheckInDistanceM] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [photos, setPhotos] = useState<DeliveryPhoto[]>([]);
   const [photosLoading, setPhotosLoading] = useState(true);
@@ -142,7 +144,7 @@ export default function Detail() {
     const query = `${addressForMap}, Brasil`;
     const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(query)}`;
     fetch(url, {
-      headers: { 'User-Agent': 'EntregaJa-Android/0.1.14 (map preview)' },
+      headers: { 'User-Agent': 'EntregaJa-Android/1.0.0 (map preview)' },
       signal: controller.signal,
     }).then(async response => {
       if (!response.ok) throw new Error(`Nominatim ${response.status}`);
@@ -222,6 +224,7 @@ export default function Detail() {
   async function queue(kind: OperationKind) {
     if (!item || busy) return;
     setBusy(true);
+    let measuredDistanceM: number | null = null;
     try {
       const selectedReason = problemReasons.find(reason => reason.code === problemReason);
       let payload: Record<string, unknown> = kind === 'problem'
@@ -234,6 +237,10 @@ export default function Detail() {
           Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High }),
           new Promise<never>((_, reject) => setTimeout(() => reject(new Error('O GPS demorou mais de 10 segundos.')), 10000)),
         ]);
+        if (coords) {
+          measuredDistanceM = distanceMeters(position.coords, coords);
+          setCheckInDistanceM(measuredDistanceM);
+        }
         payload = {
           ...payload,
           latitude: position.coords.latitude,
@@ -261,9 +268,11 @@ export default function Detail() {
       const celebrationEnabled = await SecureStore.getItemAsync('celebrationEnabled');
       if (kind === 'completion' && !pending && celebrationEnabled !== 'false') Vibration.vibrate(35);
       if (kind === 'note') { setSavedNote(note); setToast('Observação salva'); setTimeout(() => setToast(''), 4000); }
+      const distanceHint = kind === 'check_in' && measuredDistanceM !== null
+        ? ` Distância aproximada até o endereço: ${Math.round(measuredDistanceM)} m.` : '';
       Alert.alert(kind === 'completion' && !pending ? 'Entrega concluída' : pending ? 'Salvo no aparelho' : 'Enviado', pending
-        ? 'A operação será enviada quando houver conexão.'
-        : 'A operação foi registrada na API.');
+        ? `A operação será enviada quando houver conexão.${distanceHint}`
+        : `A operação foi registrada na API.${distanceHint}`);
       if (kind === 'completion' && !pending) router.back();
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Confira os dados e tente novamente.';
@@ -313,6 +322,7 @@ export default function Detail() {
             {item.customer_phone && <Pressable style={detailStyles.smallButton} onPress={() => Linking.openURL(`tel:${item.customer_phone}`)} accessibilityRole="button"><Text style={detailStyles.secondaryButtonText}>Ligar</Text></Pressable>}
           </View>
           {!!gpsError && <View style={detailStyles.errorBox}><Text style={detailStyles.errorText}>{gpsError}</Text><Pressable onPress={() => { setGpsError(''); void queue('check_in'); }} accessibilityRole="button"><Text style={sharedStyles.link}>Tentar de novo</Text></Pressable></View>}
+          {checkInDistanceM !== null && <Text style={detailStyles.distanceHint}>Distância aproximada no último check-in: {Math.round(checkInDistanceM)} m</Text>}
         </View>
 
         <View style={detailStyles.card}>
@@ -432,6 +442,7 @@ const detailStyles = StyleSheet.create({
   mapAttribution: { position: 'absolute', right: 4, bottom: 3, backgroundColor: '#FFFFFFDD', color: '#263C46', fontFamily: 'Inter_400Regular', fontSize: 9, paddingHorizontal: 4, paddingVertical: 2, borderRadius: 3 },
   mapLoading: { position: 'absolute', left: 8, top: 8, backgroundColor: '#FFFFFFDD', color: '#263C46', fontFamily: 'Inter_500Medium', fontSize: 11, paddingHorizontal: 7, paddingVertical: 4, borderRadius: 5 },
   mapPointLabel: { fontFamily: 'Inter_500Medium', color: '#6B7C87', fontSize: 12, marginTop: 8 },
+  distanceHint: { fontFamily: 'Inter_500Medium', color: '#0F4C5C', fontSize: 13, marginTop: 8 },
   mapError: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F4F7F8CC' },
   mapErrorText: { fontFamily: 'Inter_500Medium', color: '#263C46', backgroundColor: '#FFFFFFDD', padding: 10, borderRadius: 8 },
   mapLink: { fontFamily: 'Inter_500Medium', color: '#0F4C5C', textAlign: 'center', marginTop: 5, marginBottom: 3 },

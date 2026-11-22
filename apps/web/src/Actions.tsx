@@ -1,4 +1,4 @@
-import{useEffect,useRef,useState,type FormEvent}from'react';import{Medal,Plus,Target,Trophy,Users,X}from'lucide-react';import{api}from'./api';import{VolumeIcon}from'./design-system';
+import{useEffect,useRef,useState,type FormEvent}from'react';import{Medal,Plus,Target,Trophy,Users,X}from'lucide-react';import{api,latestDashboardData}from'./api';import{VolumeIcon}from'./design-system';
 type Row=Record<string,unknown>;type List={items:Row[]};
 const deliveryStatuses:Record<string,string>={pending:'Pendente',assigned:'Atribuída',in_progress:'Em rota',problem:'Problema registrado',completed:'Concluída',cancelled:'Cancelada'};
 const eventKinds:Record<string,string>={created:'Criada',assigned:'Atribuída',reassigned:'Reatribuída',viewed:'Visualizada',check_in:'Check-in',completed:'Concluída',problem:'Problema registrado',cancelled:'Cancelada',note:'Atualizada'};
@@ -42,6 +42,59 @@ async function loadChoiceItems(path: string): Promise<Row[]> {
   return items;
 }
 
+function CustomerAutocomplete({ value, onChange }: { value: string; onChange: (id: string) => void }) {
+  const [query, setQuery] = useState('');
+  const [items, setItems] = useState<Row[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const requestId = useRef(0);
+  const selected = items.find(item => String(item.id) === value);
+
+  useEffect(() => {
+    const text = query.trim();
+    if (text.length < 2 || value) {
+      setItems(value ? items : []);
+      setLoading(false);
+      setError('');
+      return;
+    }
+    const id = ++requestId.current;
+    setLoading(true);
+    setError('');
+    const timer = window.setTimeout(() => {
+      api<List>(`/tenant/customers?search=${encodeURIComponent(text)}&limit=20`)
+        .then(result => { if (requestId.current === id) setItems(result.items); })
+        .catch(e => { if (requestId.current === id) { setItems([]); setError((e as Error).message); } })
+        .finally(() => { if (requestId.current === id) setLoading(false); });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [query, value]);
+
+  function select(item: Row) {
+    onChange(String(item.id));
+    setQuery('');
+    setItems([item]);
+  }
+
+  function clear() {
+    onChange('');
+    setQuery('');
+    setItems([]);
+  }
+
+  return <div className="customer-autocomplete">
+    <input type="hidden" name="customerId" value={value} required aria-hidden="true" />
+    {selected ? <div className="selected-customer"><span>{choiceLabel(selected)}</span><button type="button" onClick={clear} aria-label="Limpar cliente">Limpar</button></div> : <>
+      <input value={query} onChange={event => { setQuery(event.target.value); if (value) onChange(''); }} placeholder="Nome, telefone ou e-mail" autoComplete="off" role="combobox" aria-autocomplete="list" aria-expanded={query.trim().length >= 2} aria-controls="customer-results" />
+      {query.trim().length > 0 && query.trim().length < 2 && <small>Digite pelo menos 2 caracteres.</small>}
+      {loading && <small role="status">Buscando clientes…</small>}
+      {error && <div className="alert" role="alert">{error}</div>}
+      {!loading && !error && query.trim().length >= 2 && items.length === 0 && <small>Nenhum cliente encontrado.</small>}
+      {items.length > 0 && <div id="customer-results" role="listbox" className="customer-results">{items.map(item => <button type="button" role="option" key={String(item.id)} onClick={() => select(item)}>{choiceLabel(item)}{item.phone || item.email ? <small>{[item.phone, item.email].filter(Boolean).join(' · ')}</small> : null}</button>)}</div>}
+    </>}
+  </div>;
+}
+
 function choiceLabel(row: Row): string {
   const personOrOrg = row.name ?? row.full_name ?? row.email;
   if (personOrOrg) return String(personOrOrg);
@@ -78,7 +131,7 @@ export function Actions({ section, refresh }: { section: string; refresh: () => 
   useEffect(() => {
     if (!open || !spec) return;
     let active = true;
-    const keys = spec.fields.map(field => field.key).filter(key => key in choicePaths);
+    const keys = spec.fields.map(field => field.key).filter(key => key in choicePaths && !(section === 'deliveries' && key === 'customerId'));
     setChoices({});
     setError('');
     setChoiceError('');
@@ -131,7 +184,7 @@ export function Actions({ section, refresh }: { section: string; refresh: () => 
   if(section==='gamification') return <GamificationPanel refresh={refresh}/>;
   if (!spec) return null;
   const missingRequiredChoice = spec.fields.some(field =>
-    field.required && field.key in choicePaths && !choices[field.key]?.length);
+    field.required && field.key in choicePaths && !(section === 'deliveries' && field.key === 'customerId') && !choices[field.key]?.length);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -166,6 +219,7 @@ export function Actions({ section, refresh }: { section: string; refresh: () => 
       {field.options.map(option => <option value={option.value} key={option.value}>{option.label}</option>)}
     </select>;
     if (field.key in choicePaths) {
+      if (section === 'deliveries' && field.key === 'customerId') return <CustomerAutocomplete value={customerId} onChange={setCustomerId} />;
       if(section==='deliveries'&&field.key==='addressId'&&inlineAddress)return null;
       if(section==='deliveries'&&field.key==='courierMembershipId'&&claimable)return <span>Será escolhido pelo primeiro entregador que aceitar.</span>;
       const available = field.key === 'addressId' && customerId
@@ -257,16 +311,18 @@ function AddressLocation({id,row,refresh}:{id:string;row:Row;refresh:()=>void}){
 export function TenantSettings({data,refresh}:{data:Row;refresh:()=>void}){const[error,setError]=useState(''),[saved,setSaved]=useState(false);async function submit(e:FormEvent<HTMLFormElement>){e.preventDefault();try{const contactEmail=String(new FormData(e.currentTarget).get('contactEmail')).trim()||null;await api('/tenant/settings',{method:'PATCH',body:JSON.stringify({contactEmail})});setSaved(true);setError('');refresh()}catch(e){setError((e as Error).message)}}return <section className="detail"><h2>{String(data.name??'Empresa')}</h2><p>Situação: {String(data.status??'—')}</p><form onSubmit={submit}><label>E-mail de contato<input name="contactEmail" type="email" defaultValue={String(data.contact_email??'')}/></label><button>Salvar contato</button></form>{saved&&<div className="notice">Contato atualizado.</div>}{error&&<div className="alert">{error}</div>}</section>}
 
 function LiveOperationMap() {
-  const [data,setData]=useState<Row|null>(null);
-  const [error,setError]=useState('');
-  useEffect(()=>{let active=true;const load=()=>api<Row>('/tenant/dashboard?period=day').then(value=>{if(active)setData(value)}).catch(()=>setError('Não foi possível carregar o mapa ao vivo.'));load();const timer=window.setInterval(load,30_000);return()=>{active=false;window.clearInterval(timer)}},[]);
+  const [data,setData]=useState<Row|null>(()=>latestDashboardData as Row|null);
+  useEffect(()=>{const receive=(event:Event)=>setData((event as CustomEvent<Row>).detail);window.addEventListener('entregaja:dashboard-data',receive);return()=>window.removeEventListener('entregaja:dashboard-data',receive)},[]);
   const couriers=Array.isArray(data?.liveCouriers)?data.liveCouriers as Row[]:[];
   const points=couriers.map(c=>({courier:c,lat:Number(c.latitude),lon:Number(c.longitude)})).filter(point=>Number.isFinite(point.lat)&&Number.isFinite(point.lon));
   const minLat=Math.min(...points.map(point=>point.lat),-3.78),maxLat=Math.max(...points.map(point=>point.lat),-3.72),minLon=Math.min(...points.map(point=>point.lon),-38.56),maxLon=Math.max(...points.map(point=>point.lon),-38.50);
   const box=`${minLon-.01},${minLat-.01},${maxLon+.01},${maxLat+.01}`;
   const left=(lon:number)=>`${((lon-minLon)/(maxLon-minLon||1))*100}%`;
   const top=(lat:number)=>`${100-((lat-minLat)/(maxLat-minLat||1))*100}%`;
-  return <section className="live-operation"><div className="section-heading"><div><h2>Operação ao vivo</h2><p>{couriers.length?`${couriers.length} entregador(es) em rota`:'Nenhum entregador em rota agora'}</p></div><span className="live-indicator">Atualiza a cada 30 s</span></div>{error&&<div className="alert">{error}</div>}<div className="live-map" role="img" aria-label="Mapa dos entregadores em rota"><iframe title="Mapa dos entregadores em rota" src={`https://www.openstreetmap.org/export/embed.html?bbox=${box.replaceAll(',','%2C')}&layer=mapnik`} loading="lazy" referrerPolicy="no-referrer"/>{points.map(point=><span key={String(point.courier.route_id)} className="live-courier-marker" style={{left:left(point.lon),top:top(point.lat)}} title={String(point.courier.full_name)} aria-label={String(point.courier.full_name)}/>)}</div><div className="live-courier-list">{couriers.map(c=><div key={String(c.route_id)}><b>{String(c.full_name)}</b><span>{c.latitude&&c.longitude?'Posição recebida':'Aguardando GPS'}</span></div>)}</div></section>;
+  const unavailable=couriers.filter(c=>c.gps_status!=='ok');
+  const worker=(data as Row|undefined)?.worker as Row|undefined;
+  const workerLabels:Record<string,string>={active:'Worker ativo',stopped:'Worker parado',error:'Worker com erro',no_credential:'Firebase sem credencial',no_heartbeat:'Worker sem heartbeat'};
+  return <section className="live-operation"><div className="section-heading"><div><h2>Operação ao vivo</h2><p>{couriers.length?`${couriers.length} entregador(es) em rota`:'Nenhum entregador em rota agora'}</p></div><span className={`live-indicator ${worker?.status==='active'?'':'status-overdue'}`}>{workerLabels[String(worker?.status??'no_heartbeat')]}{worker?.pending?` · ${String(worker.pending)} na fila`:''}</span></div>{worker?.status==='error'&&<div className="alert" role="alert">O worker de notificações reportou erro: {String(worker.lastError)}</div>}{worker?.status==='no_credential'&&<div className="notice" role="status">As notificações push estão desativadas: configure o Firebase. O acompanhamento e o aviso local continuam disponíveis.</div>}{unavailable.length>0&&<div className="alert" role="alert">{unavailable.length===1?'Há uma rota ativa sem sinal ou com GPS atrasado.':`Há ${unavailable.length} rotas ativas sem sinal ou com GPS atrasado.`}</div>}<div className="live-map" role="img" aria-label="Mapa dos entregadores em rota"><iframe title="Mapa dos entregadores em rota" src={`https://www.openstreetmap.org/export/embed.html?bbox=${box.replaceAll(',','%2C')}&layer=mapnik`} loading="lazy" referrerPolicy="no-referrer"/>{points.map(point=><span key={String(point.courier.route_id)} className="live-courier-marker" style={{left:left(point.lon),top:top(point.lat)}} title={String(point.courier.full_name)} aria-label={String(point.courier.full_name)}/>)}</div><div className="live-courier-list">{couriers.map(c=><div key={String(c.route_id)}><b>{String(c.full_name)}</b><span className={c.gps_status==='ok'?'':'status-overdue'}>{c.gps_status==='ok'?'Posição recebida':c.gps_status==='stale'?'GPS atrasado':'Sem sinal GPS'}</span></div>)}</div></section>;
 }
 
 function Heatmap() { const [points,setPoints]=useState<Row[]>([]); const [error,setError]=useState(''); useEffect(()=>{api<Row[]>('/tenant/reports/heatmap').then(setPoints).catch(()=>setError('Não foi possível carregar o mapa de concentração.'))},[]); const valid=points.map(point=>({lat:Number(point.latitude),lon:Number(point.longitude),weight:Number(point.weight??1)})).filter(point=>Number.isFinite(point.lat)&&Number.isFinite(point.lon)); const minLat=Math.min(...valid.map(point=>point.lat),-3.78),maxLat=Math.max(...valid.map(point=>point.lat),-3.72),minLon=Math.min(...valid.map(point=>point.lon),-38.56),maxLon=Math.max(...valid.map(point=>point.lon),-38.50); const left=(lon:number)=>`${((lon-minLon)/(maxLon-minLon||1))*100}%`; const top=(lat:number)=>`${100-((lat-minLat)/(maxLat-minLat||1))*100}%`; return <section className="heatmap-card"><div className="section-heading"><div><h2>Concentração de entregas</h2><p>Entregas concluídas por localização</p></div><span className="live-indicator">Até 1.000 pontos</span></div>{error&&<div className="alert">{error}</div>}{valid.length?<div className="heatmap-map" role="img" aria-label="Mapa de concentração das entregas concluídas"><iframe title="Mapa base da concentração de entregas" src={`https://www.openstreetmap.org/export/embed.html?bbox=${minLon}%2C${minLat}%2C${maxLon}%2C${maxLat}&layer=mapnik`} loading="lazy" referrerPolicy="no-referrer"/>{valid.map((point,index)=><span key={`${point.lat}-${point.lon}-${index}`} className="heatmap-point" style={{left:left(point.lon),top:top(point.lat),opacity:Math.min(.9,.25+point.weight/10),transform:`translate(-50%,-50%) scale(${Math.min(2.5,1+point.weight/5)})`}} title={`${point.weight} entregas`}/>)}</div>:<p className="empty-hint">Ainda não há coordenadas suficientes para montar o mapa.</p>}</section>; }

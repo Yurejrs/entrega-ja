@@ -51,7 +51,8 @@ test('full API flow with real PostgreSQL roles', async () => {
     host: '127.0.0.1',port:0,
     authDatabaseUrl:url('api_auth','local-auth-only'),tenantDatabaseUrl:url('api_tenant','local-tenant-only'),
     platformDatabaseUrl:url('api_platform','local-platform-only'),workerDatabaseUrl:url('api_worker','local-worker-only'),
-    fileStorageDir:dir,mfaKey:Buffer.alloc(32,1),cookieSecure:false,
+    fileStorageDir:dir,mfaKey:Buffer.alloc(32,1),cookieSecure:false,checkInMaxDistanceM:200,
+    gpsMaxFutureSkewSeconds:300,gpsMaxAgeDays:30,gpsLowPrecisionThresholdM:200,locationPolicyVersion:'1.0.0',
   };
   const { app,pools } = await buildServer(config);
   try {
@@ -59,6 +60,11 @@ test('full API flow with real PostgreSQL roles', async () => {
     const openapi = app.swagger();
     assert.ok(openapi.paths?.['/auth/login']);
     assert.ok(openapi.paths?.['/deliveries']);
+    assert.ok(openapi.paths?.['/mobile/location-consent']);
+    assert.ok(openapi.paths?.['/mobile/routes/{id}/locations']);
+    assert.ok(openapi.paths?.['/mobile/routes/{id}/cancel']);
+    assert.ok(openapi.paths?.['/tenant/customers']);
+    assert.ok(openapi.paths?.['/tenant/routes/{id}/live']);
     const platformEmail = `platform-${randomUUID()}@test.local`;
     const password = 'test-123';
     await pools.auth.query(`INSERT INTO app.users(email,password_hash,full_name,is_platform_admin)
@@ -94,7 +100,7 @@ test('full API flow with real PostgreSQL roles', async () => {
     assert.equal(customer.status,201,JSON.stringify(customer.data));
     const searchedCustomers = await call(app,'GET','/v1/tenant/customers?search=Maria',undefined,admin);
     assert.ok(searchedCustomers.data.items.some((row: {id:string}) => row.id===customer.data.id));
-    const address = await call(app,'POST','/v1/tenant/addresses',{customerId:customer.data.id,street:'Rua Um',city:'Fortaleza',state:'CE'},admin);
+    const address = await call(app,'POST','/v1/tenant/addresses',{customerId:customer.data.id,street:'Rua Um',city:'Fortaleza',state:'CE',referenceLatitude:-3.7319,referenceLongitude:-38.5267},admin);
     assert.equal(address.status,201,JSON.stringify(address.data));
     const searchedAddresses = await call(app,'GET','/v1/tenant/addresses?search=Rua%20Um',undefined,admin);
     assert.ok(searchedAddresses.data.items.some((row: {id:string}) => row.id===address.data.id));
@@ -199,6 +205,10 @@ test('full API flow with real PostgreSQL roles', async () => {
     for (const createdExtra of [overdue,dueToday,future]) assert.equal(createdExtra.status,201,JSON.stringify(createdExtra.data));
     const route = await call(app,'POST','/v1/mobile/routes',{deliveryIds:[deliveryId,dueToday.data.id,future.data.id]},courier);
     assert.equal(route.status,200,JSON.stringify(route.data));
+    const blockedStart = await call(app,'POST',`/v1/mobile/routes/${route.data.id}/start`,{},courier);
+    assert.equal(blockedStart.status,400,JSON.stringify(blockedStart.data));
+    const locationConsent = await call(app,'POST','/v1/mobile/location-consent',{policyVersion:'1.0.0'},courier);
+    assert.equal(locationConsent.status,200,JSON.stringify(locationConsent.data));
     const startedRoute = await call(app,'POST',`/v1/mobile/routes/${route.data.id}/start`,{},courier);
     assert.equal(startedRoute.status,200,JSON.stringify(startedRoute.data));
     const courierRouteStatus = await call(app,'GET',`/v1/mobile/routes/${route.data.id}`,undefined,courier);
@@ -213,7 +223,14 @@ test('full API flow with real PostgreSQL roles', async () => {
     const expiredRoutePointId=randomUUID();
     const expiredRoutePoint={...routePoint,clientPointId:expiredRoutePointId,capturedAt:new Date(Date.now()-31*24*60*60*1000).toISOString()};
     const oldRouteLocation=await call(app,'POST',`/v1/mobile/routes/${route.data.id}/locations`,{points:[expiredRoutePoint]},courier);
-    assert.equal(oldRouteLocation.data.accepted,1);
+    assert.equal(oldRouteLocation.status,400,JSON.stringify(oldRouteLocation.data));
+    const futureRoutePoint={...routePoint,clientPointId:randomUUID(),capturedAt:new Date(Date.now()+6*60*1000).toISOString()};
+    const futureRouteLocation=await call(app,'POST',`/v1/mobile/routes/${route.data.id}/locations`,{points:[futureRoutePoint]},courier);
+    assert.equal(futureRouteLocation.status,400,JSON.stringify(futureRouteLocation.data));
+    const impreciseRoutePoint={...routePoint,clientPointId:randomUUID(),accuracyM:250};
+    const impreciseRouteLocation=await call(app,'POST',`/v1/mobile/routes/${route.data.id}/locations`,{points:[impreciseRoutePoint]},courier);
+    assert.equal(impreciseRouteLocation.status,200,JSON.stringify(impreciseRouteLocation.data));
+    assert.equal(impreciseRouteLocation.data.lowPrecision,1);
     const liveRoute = await call(app,'GET',`/v1/tenant/routes/${route.data.id}/live`,undefined,admin);
     assert.equal(liveRoute.status,200,JSON.stringify(liveRoute.data));
     assert.equal(liveRoute.data.route.status,'active');
@@ -363,6 +380,10 @@ test('full API flow with real PostgreSQL roles', async () => {
     const deliveredNotification = await pools.worker.query<{ status: string }>(
       'SELECT status FROM app.notification_outbox WHERE id=$1',[notification.rows[0]!.id]);
     assert.equal(deliveredNotification.rows[0]!.status,'sent');
+    await worker.recordHeartbeat(undefined,'no_credential');
+    const workerDashboard = await call(app,'GET','/v1/tenant/dashboard?period=day',undefined,admin);
+    assert.equal(workerDashboard.status,200,JSON.stringify(workerDashboard.data));
+    assert.equal(workerDashboard.data.worker.status,'no_credential');
     const staging = join(dir,'staging');
     await mkdir(staging,{recursive:true});
     const orphan = join(staging,'orphan.part');
@@ -465,6 +486,18 @@ test('full API flow with real PostgreSQL roles', async () => {
     const sqlAdmin = new pg.Client({connectionString:url('postgres','local-dev-only')});
     await sqlAdmin.connect();
     try {
+      const retainedPhoto = await sqlAdmin.query<{ storage_key: string }>(
+        'SELECT storage_key FROM app.delivery_photos WHERE id=$1',[detail.data.photos[0].id]);
+      await sqlAdmin.query(`UPDATE app.deliveries SET completed_at=now()-interval '181 days',updated_at=now()-interval '181 days' WHERE id=$1`,[deliveryId]);
+      await sqlAdmin.query(`UPDATE app.delivery_photos SET created_at=now()-interval '181 days' WHERE id=$1`,[detail.data.photos[0].id]);
+      assert.ok((await worker.cleanupOrphans()) >= 1);
+      assert.equal((await sqlAdmin.query('SELECT 1 FROM app.delivery_photos WHERE id=$1',[detail.data.photos[0].id])).rowCount,0);
+      await assert.rejects(access(join(dir,retainedPhoto.rows[0]!.storage_key)));
+      const retainedEvent = await sqlAdmin.query<{ id: string }>(
+        `SELECT id FROM app.delivery_events WHERE delivery_id=$1 AND kind='created' LIMIT 1`,[deliveryId]);
+      await sqlAdmin.query(`UPDATE app.delivery_events SET occurred_at=now()-interval '366 days' WHERE id=$1`,[retainedEvent.rows[0]!.id]);
+      assert.ok((await worker.cleanupOrphans()) >= 1);
+      assert.equal((await sqlAdmin.query('SELECT 1 FROM app.delivery_events WHERE id=$1',[retainedEvent.rows[0]!.id])).rowCount,0);
       await sqlAdmin.query(`CREATE OR REPLACE FUNCTION app.api_test_fail_photo() RETURNS trigger
         LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'forced photo failure'; END $$`);
       await sqlAdmin.query('DROP TRIGGER IF EXISTS api_test_fail_photo ON app.delivery_photos');
@@ -529,6 +562,16 @@ test('full API flow with real PostgreSQL roles', async () => {
     const cancelledRoute=await call(app,'GET',`/v1/tenant/routes/${cancelRoute.data.id}/live`,undefined,admin);
     assert.equal(cancelledRoute.data.route.status,'cancelled');
     assert.equal(cancelledRoute.data.stops[0].status,'skipped');
+    const manualCancelTarget = await call(app,'POST','/v1/deliveries',
+      {customerId:customer.data.id,addressId:address.data.id,courierMembershipId,merchandiseDescription:'Cancelar rota diretamente'},admin);
+    assert.equal(manualCancelTarget.status,201);
+    const manualCancelRoute = await call(app,'POST','/v1/mobile/routes',{deliveryIds:[manualCancelTarget.data.id]},courier);
+    assert.equal(manualCancelRoute.status,200,JSON.stringify(manualCancelRoute.data));
+    assert.equal((await call(app,'POST',`/v1/mobile/routes/${manualCancelRoute.data.id}/start`,{},courier)).status,200);
+    assert.equal((await call(app,'POST',`/v1/mobile/routes/${manualCancelRoute.data.id}/cancel`,{},courier)).status,200);
+    const manuallyCancelledRoute = await call(app,'GET',`/v1/tenant/routes/${manualCancelRoute.data.id}/live`,undefined,admin);
+    assert.equal(manuallyCancelledRoute.data.route.status,'cancelled');
+    assert.equal(manuallyCancelledRoute.data.stops[0].status,'skipped');
     assert.equal((await call(app,'POST',`/v1/deliveries/${deliveryId}/assignment`,
       {courierMembershipId},admin)).status,409);
 

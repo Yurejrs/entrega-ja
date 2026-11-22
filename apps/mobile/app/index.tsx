@@ -20,8 +20,7 @@ import { registerDevice, unregisterDevice, onNotification } from '../src/notific
 import { Logo, brand } from '../src/brand';
 import { deliveryStatusLabel } from '../src/status';
 import { accountKey } from '../src/account-key';
-import { startRouteTracking } from '../src/route-tracking';
-import { resumeRouteTracking } from '../src/route-tracking';
+import { cancelRouteTracking, resumeRouteTracking, startRouteTracking } from '../src/route-tracking';
 import { toggleRouteSelection } from '../src/route-selection';
 import { EmptyState, Icon, ProgressRing, StatusChip } from '../src/design-system';
 
@@ -304,6 +303,7 @@ export default function Home() {
   const [pushReady,setPushReady]=useState<boolean|null>(null);
   const [pushReason,setPushReason]=useState('');
   const [developerMode, setDeveloperMode] = useState(false);
+  const [activeRouteId, setActiveRouteId] = useState<string | null>(null);
   const versionTaps = useRef(0);
   const versionTapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -315,6 +315,7 @@ export default function Home() {
       setItems(deliveries());
       setReady(true);
     });
+    SecureStore.getItemAsync('activeRouteId').then(setActiveRouteId).catch(() => {});
   }, []);
 
   useFocusEffect(useCallback(() => {
@@ -377,6 +378,7 @@ export default function Home() {
     setBusy(true);
     try {
       await resumeRouteTracking().catch(()=>{});
+      setActiveRouteId(await SecureStore.getItemAsync('activeRouteId'));
       await flushOperations();
       setItems(await syncDeliveries());
       const [nextProfile, nextProductivity] = await Promise.all([
@@ -471,7 +473,9 @@ export default function Home() {
   function callCustomer(item:Delivery){if(!item.customer_phone){Alert.alert('Telefone indisponível','Este cliente não possui telefone cadastrado.');return;}Linking.openURL(`tel:${item.customer_phone}`).catch(()=>Alert.alert('Telefone','Não foi possível abrir o telefone neste aparelho.'));}
   function openDeliveryMap(item:Delivery){const address=item.destination_snapshot??{};const query=[address.street,address.number,address.neighborhood,address.city,address.state,address.postal_code].filter(Boolean).join(', ');const coordinates=address.reference_latitude!=null&&address.reference_longitude!=null?`${address.reference_latitude},${address.reference_longitude}`:query;Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(coordinates)}`).catch(()=>Alert.alert('Mapa','Não foi possível abrir o aplicativo de mapas.'));}
   async function claimDelivery(id:string){try{await request(`/deliveries/${id}/claim`,{method:'POST',body:'{}'});setDeliveryTab('open');await refresh();Alert.alert('Entrega aceita','A entrega agora está na sua lista.')}catch(error){Alert.alert('Entrega indisponível',userFacingError(error,'Não foi possível aceitar esta entrega.'));request<{items:Delivery[]}>('/mobile/available').then(result=>setAvailableDeliveries(result.items)).catch(()=>{});}}
-  async function createAndStartRoute(){try{const result=await request<{id:string}>('/mobile/routes',{method:'POST',body:JSON.stringify({deliveryIds:routeSelection})});await startRouteTracking(result.id);setRouteSelection([]);setRouteSelectionMode(false);Alert.alert('Rota iniciada','O GPS será compartilhado enquanto esta rota estiver ativa.')}catch(error){Alert.alert('Não foi possível iniciar a rota',userFacingError(error,'Tente novamente em instantes.'))}}
+  async function ensureLocationConsent(){const consent=await request<{accepted:boolean;policyVersion:string}>('/mobile/location-consent');if(consent.accepted)return;await new Promise<void>((resolve,reject)=>Alert.alert('Localização durante a rota','Enquanto uma rota estiver ativa, o Entrega Já coleta sua localização para acompanhamento operacional. Você pode interromper o acompanhamento ao terminar ou cancelar a rota.',[{text:'Agora não',style:'cancel',onPress:()=>reject(new Error('Aceite a política de localização para iniciar a rota.'))},{text:'Aceitar e continuar',onPress:()=>{request('/mobile/location-consent',{method:'POST',body:JSON.stringify({policyVersion:consent.policyVersion})}).then(()=>resolve()).catch(reject)}}]));}
+  async function createAndStartRoute(){try{await ensureLocationConsent();const result=await request<{id:string}>('/mobile/routes',{method:'POST',body:JSON.stringify({deliveryIds:routeSelection})});await startRouteTracking(result.id);setActiveRouteId(result.id);setRouteSelection([]);setRouteSelectionMode(false);Alert.alert('Rota iniciada','O GPS será compartilhado enquanto esta rota estiver ativa.')}catch(error){Alert.alert('Não foi possível iniciar a rota',userFacingError(error,'Tente novamente em instantes.'))}}
+  function cancelCurrentRoute(){if(!activeRouteId)return;Alert.alert('Cancelar rota?','O acompanhamento GPS será encerrado e as paradas restantes serão canceladas.',[{text:'Voltar',style:'cancel'},{text:'Cancelar rota',style:'destructive',onPress:async()=>{try{await cancelRouteTracking();setActiveRouteId(null);await refresh();Alert.alert('Rota cancelada','O acompanhamento GPS foi encerrado.')}catch(error){Alert.alert('Não foi possível cancelar',userFacingError(error,'Mantenha a internet ativa e tente novamente.'))}}}]);}
 
   async function chooseProfileImage(kind: 'photo' | 'cover') {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -620,7 +624,7 @@ export default function Home() {
             keyExtractor={item => item.id}
             contentContainerStyle={deliveryRows.length ? styles.list : styles.listEmpty}
             ListHeaderComponent={<View style={styles.deliveryHeader}>
-              {deliveryTab==='open'&&<><Pressable style={[styles.secondarySync,{marginTop:10},routeSelectionMode&&styles.routeSelectionToggleActive]} onPress={()=>{setRouteSelectionMode(mode=>{if(mode)setRouteSelection([]);return !mode;})}} accessibilityRole="button" accessibilityState={{selected:routeSelectionMode}}><Text style={[styles.secondarySyncText,routeSelectionMode&&styles.routeSelectionToggleTextActive]}>{routeSelectionMode?'Cancelar montagem da rota':'Montar rota'}</Text></Pressable>{routeSelectionMode&&<View style={styles.routeSelectionHint}><Text style={styles.routeSelectionHintText}>{routeSelection.length?`Toque nas entregas na ordem da rota · ${routeSelection.length} selecionada(s)`:'Toque nas entregas na ordem em que devem ser feitas.'}</Text></View>}{routeSelection.length>0&&<Pressable style={styles.syncButton} onPress={createAndStartRoute}><Text style={styles.primaryButtonText}>Iniciar rota · {routeSelection.length} parada(s)</Text></Pressable>}</>}
+              {deliveryTab==='open'&&<>{activeRouteId&&<Pressable style={[styles.secondarySync,{marginTop:10}]} onPress={cancelCurrentRoute} accessibilityRole="button"><Text style={styles.secondarySyncText}>Cancelar rota ativa</Text></Pressable>}<Pressable style={[styles.secondarySync,{marginTop:10},routeSelectionMode&&styles.routeSelectionToggleActive]} onPress={()=>{setRouteSelectionMode(mode=>{if(mode)setRouteSelection([]);return !mode;})}} accessibilityRole="button" accessibilityState={{selected:routeSelectionMode}}><Text style={[styles.secondarySyncText,routeSelectionMode&&styles.routeSelectionToggleTextActive]}>{routeSelectionMode?'Cancelar montagem da rota':'Montar rota'}</Text></Pressable>{routeSelectionMode&&<View style={styles.routeSelectionHint}><Text style={styles.routeSelectionHintText}>{routeSelection.length?`Toque nas entregas na ordem da rota · ${routeSelection.length} selecionada(s)`:'Toque nas entregas na ordem em que devem ser feitas.'}</Text></View>}{routeSelection.length>0&&<Pressable style={styles.syncButton} onPress={createAndStartRoute}><Text style={styles.primaryButtonText}>Iniciar rota · {routeSelection.length} parada(s)</Text></Pressable>}</>}
               {operations().length > 0 && <Text style={styles.pendingText}>{operations().length} operação(ões) aguardando envio</Text>}
               {failedOperations().length > 0 && <Pressable style={styles.errorCard} onPress={() => {
                 const failed = failedOperations();

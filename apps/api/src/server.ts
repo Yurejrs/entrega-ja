@@ -14,6 +14,7 @@ import { registerPlatformRoutes } from './routes/platform.js';
 import { registerTenantRoutes } from './routes/tenant.js';
 import { registerDeliveryRoutes } from './routes/deliveries.js';
 import { registerMobileRoutes } from './routes/mobile.js';
+import { classifyFailure, incrementMetric, metricsSnapshot } from './observability.js';
 
 export async function buildServer(config: ApiConfig, injectedPools?: DbPools) {
   const app = Fastify({ logger: process.env.NODE_ENV !== 'test', bodyLimit: 1_048_576 });
@@ -21,7 +22,7 @@ export async function buildServer(config: ApiConfig, injectedPools?: DbPools) {
   await app.register(cookie);
   await app.register(rateLimit, { global: false });
   await app.register(multipart, { limits: { fileSize: 8 * 1024 * 1024, files: 1 } });
-  await app.register(swagger, { openapi: { info: { title: 'API Entregas', version: '0.1.0' },
+  await app.register(swagger, { openapi: { info: { title: 'API Entregas', version: '1.0.0-beta.1' },
     servers: [{ url: '/v1' }], tags: ['auth','platform','tenant','deliveries','mobile','files'].map(name => ({ name })) } });
   await app.register(swaggerUi, { routePrefix: '/docs' });
 
@@ -35,7 +36,14 @@ export async function buildServer(config: ApiConfig, injectedPools?: DbPools) {
     reply.status(status).send({ code, message: known ? error.message : status >= 500 ? 'Erro interno' : err.message, requestId: request.id });
   });
 
+  app.addHook('onResponse', async (request, reply) => {
+    incrementMetric('http_requests_total');
+    const failure = classifyFailure(request.url, reply.statusCode);
+    if (failure) incrementMetric(failure);
+  });
+
   app.get('/health/live', async () => ({ status: 'ok' }));
+  app.get('/health/metrics', async () => ({ metrics: metricsSnapshot() }));
   app.get('/health/ready', async (_request, reply) => {
     try {
       await Promise.all([pools.auth,pools.tenant,pools.platform].map(pool => pool.query('SELECT 1')));

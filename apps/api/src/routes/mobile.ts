@@ -11,6 +11,20 @@ import { lockOperation } from './deliveries.js';
 const uuid = { type: 'string', format: 'uuid' };
 
 export function registerMobileRoutes(app: FastifyInstance, pools: DbPools, config: ApiConfig): void {
+  app.get('/v1/mobile/location-consent',{schema:{tags:['mobile']}},async request=>{
+    const {identity}=await authenticate(request,pools);if(identity.role!=='courier'||identity.scope!=='tenant')forbidden();
+    return withTenant(pools,identity,async client=>{const result=await client.query<{policy_version:string;accepted_at:string}>(
+      'SELECT policy_version,accepted_at FROM app.location_policy_consents WHERE membership_id=app.current_membership_id() AND policy_version=$1',[config.locationPolicyVersion]);
+      return {accepted:Boolean(result.rowCount),policyVersion:config.locationPolicyVersion,acceptedAt:result.rows[0]?.accepted_at??null};});
+  });
+  app.post('/v1/mobile/location-consent',{schema:{tags:['mobile'],body:{type:'object',required:['policyVersion'],properties:{policyVersion:{type:'string',minLength:1,maxLength:40}},additionalProperties:false}}},async request=>{
+    const {identity}=await authenticate(request,pools);if(identity.role!=='courier'||identity.scope!=='tenant')forbidden();const {policyVersion}=request.body as {policyVersion:string};
+    if(policyVersion!==config.locationPolicyVersion)badRequest('A política de localização foi atualizada. Recarregue o aplicativo.');
+    return withTenant(pools,identity,async client=>{const result=await client.query<{accepted_at:string}>(`INSERT INTO app.location_policy_consents(tenant_id,membership_id,user_id,policy_version,accepted_at)
+      VALUES(app.current_tenant_id(),app.current_membership_id(),app.current_user_id(),$1,now())
+      ON CONFLICT(tenant_id,membership_id) DO UPDATE SET user_id=EXCLUDED.user_id,policy_version=EXCLUDED.policy_version,accepted_at=EXCLUDED.accepted_at
+      RETURNING accepted_at`,[policyVersion]);return {accepted:true,policyVersion,acceptedAt:result.rows[0]!.accepted_at};});
+  });
   app.post('/v1/mobile/routes', { schema:{tags:['mobile'],body:{type:'object',required:['deliveryIds'],properties:{deliveryIds:{type:'array',minItems:1,maxItems:50,items:uuid}},additionalProperties:false}}}, async request=>{
     const {identity}=await authenticate(request,pools);if(identity.role!=='courier'||identity.scope!=='tenant')forbidden();
     const {deliveryIds}=request.body as {deliveryIds:string[]};if(new Set(deliveryIds).size!==deliveryIds.length)badRequest('Entregas repetidas na rota');
@@ -23,15 +37,24 @@ export function registerMobileRoutes(app: FastifyInstance, pools: DbPools, confi
   });
   app.post('/v1/mobile/routes/:id/start',{schema:{tags:['mobile'],params:{type:'object',required:['id'],properties:{id:uuid}}}},async request=>{
     const {identity}=await authenticate(request,pools);if(identity.role!=='courier'||identity.scope!=='tenant')forbidden();const {id}=request.params as {id:string};
-    return withTenant(pools,identity,async client=>{const result=await client.query("UPDATE app.delivery_routes SET status='active',started_at=now() WHERE id=$1 AND courier_membership_id=$2 AND status='draft' RETURNING id",[id,identity.membershipId]);if(!result.rowCount)conflict('Rota indisponível');await client.query("UPDATE app.delivery_route_stops SET status='active' WHERE tenant_id=app.current_tenant_id() AND route_id=$1 AND position=(SELECT min(position) FROM app.delivery_route_stops WHERE tenant_id=app.current_tenant_id() AND route_id=$1)",[id]);return {id,started:true};});
+    return withTenant(pools,identity,async client=>{const consent=await client.query('SELECT 1 FROM app.location_policy_consents WHERE membership_id=app.current_membership_id() AND policy_version=$1',[config.locationPolicyVersion]);if(!consent.rowCount)badRequest('Leia e aceite a política de localização antes de iniciar a rota.');const result=await client.query("UPDATE app.delivery_routes SET status='active',started_at=now() WHERE id=$1 AND courier_membership_id=$2 AND status='draft' RETURNING id",[id,identity.membershipId]);if(!result.rowCount)conflict('Rota indisponível');await client.query("UPDATE app.delivery_route_stops SET status='active' WHERE tenant_id=app.current_tenant_id() AND route_id=$1 AND position=(SELECT min(position) FROM app.delivery_route_stops WHERE tenant_id=app.current_tenant_id() AND route_id=$1)",[id]);return {id,started:true};});
+  });
+  app.post('/v1/mobile/routes/:id/cancel',{schema:{tags:['mobile'],params:{type:'object',required:['id'],properties:{id:uuid}}}},async request=>{
+    const {identity}=await authenticate(request,pools);if(identity.role!=='courier'||identity.scope!=='tenant')forbidden();const {id}=request.params as {id:string};
+    return withTenant(pools,identity,async client=>{
+      const result=await client.query<{id:string}>("UPDATE app.delivery_routes SET status='cancelled',completed_at=coalesce(completed_at,now()) WHERE id=$1 AND courier_membership_id=$2 AND status IN ('draft','active') RETURNING id",[id,identity.membershipId]);
+      if(!result.rowCount)conflict('Rota indisponível para cancelamento');
+      await client.query("UPDATE app.delivery_route_stops SET status='skipped' WHERE tenant_id=app.current_tenant_id() AND route_id=$1 AND status IN ('pending','active')",[id]);
+      return {id,cancelled:true};
+    });
   });
   app.get('/v1/mobile/routes/:id',{schema:{tags:['mobile'],params:{type:'object',required:['id'],properties:{id:uuid}}}},async request=>{
     const {identity}=await authenticate(request,pools);if(identity.role!=='courier'||identity.scope!=='tenant')forbidden();const {id}=request.params as {id:string};
     return withTenant(pools,identity,async client=>{const result=await client.query('SELECT id,status FROM app.delivery_routes WHERE id=$1 AND courier_membership_id=$2',[id,identity.membershipId]);return result.rows[0]??notFound();});
   });
-  app.post('/v1/mobile/routes/:id/locations',{schema:{tags:['mobile'],params:{type:'object',required:['id'],properties:{id:uuid}},body:{type:'object',required:['points'],properties:{points:{type:'array',minItems:1,maxItems:100,items:{type:'object',required:['clientPointId','latitude','longitude','accuracyM','capturedAt'],properties:{clientPointId:uuid,latitude:{type:'number',minimum:-90,maximum:90},longitude:{type:'number',minimum:-180,maximum:180},accuracyM:{type:'number',minimum:0},capturedAt:{type:'string',format:'date-time'}},additionalProperties:false}}},additionalProperties:false}}},async request=>{
+  app.post('/v1/mobile/routes/:id/locations',{config:{rateLimit:{max:120,timeWindow:'1 minute'}},schema:{tags:['mobile'],params:{type:'object',required:['id'],properties:{id:uuid}},body:{type:'object',required:['points'],properties:{points:{type:'array',minItems:1,maxItems:100,items:{type:'object',required:['clientPointId','latitude','longitude','accuracyM','capturedAt'],properties:{clientPointId:uuid,latitude:{type:'number',minimum:-90,maximum:90},longitude:{type:'number',minimum:-180,maximum:180},accuracyM:{type:'number',minimum:0},capturedAt:{type:'string',format:'date-time'}},additionalProperties:false}}},additionalProperties:false}}},async request=>{
     const {identity}=await authenticate(request,pools);if(identity.role!=='courier'||identity.scope!=='tenant')forbidden();const {id}=request.params as {id:string};const {points}=request.body as {points:Array<{clientPointId:string;latitude:number;longitude:number;accuracyM:number;capturedAt:string}>};
-    return withTenant(pools,identity,async client=>{const route=await client.query("SELECT id FROM app.delivery_routes WHERE id=$1 AND courier_membership_id=$2 AND status='active'",[id,identity.membershipId]);if(!route.rowCount)notFound();let accepted=0;for(const p of points){const r=await client.query('INSERT INTO app.delivery_route_locations(tenant_id,route_id,client_point_id,courier_membership_id,latitude,longitude,accuracy_m,captured_at) VALUES(app.current_tenant_id(),$1,$2,$3,$4,$5,$6,$7) ON CONFLICT(tenant_id,client_point_id) DO NOTHING',[id,p.clientPointId,identity.membershipId,p.latitude,p.longitude,p.accuracyM,p.capturedAt]);accepted+=r.rowCount??0;}return {accepted};});
+    return withTenant(pools,identity,async client=>{const route=await client.query("SELECT id FROM app.delivery_routes WHERE id=$1 AND courier_membership_id=$2 AND status='active'",[id,identity.membershipId]);if(!route.rowCount)notFound();const now=Date.now();const maxAgeMs=(config.gpsMaxAgeDays??30)*86400000;const maxFutureMs=(config.gpsMaxFutureSkewSeconds??300)*1000;let accepted=0,lowPrecision=0;for(const p of points){const capturedAt=Date.parse(p.capturedAt);if(!Number.isFinite(capturedAt)||capturedAt>now+maxFutureMs)badRequest('Ponto GPS futuro ou com data inválida');if(capturedAt<now-maxAgeMs)badRequest('Ponto GPS antigo demais para sincronização');if(p.accuracyM>(config.gpsLowPrecisionThresholdM??200))lowPrecision++;const r=await client.query('INSERT INTO app.delivery_route_locations(tenant_id,route_id,client_point_id,courier_membership_id,latitude,longitude,accuracy_m,captured_at) VALUES(app.current_tenant_id(),$1,$2,$3,$4,$5,$6,$7) ON CONFLICT(tenant_id,client_point_id) DO NOTHING',[id,p.clientPointId,identity.membershipId,p.latitude,p.longitude,p.accuracyM,p.capturedAt]);accepted+=r.rowCount??0;}return {accepted,lowPrecision,confirmedClientPointIds:points.map(point=>point.clientPointId)};});
   });
   app.get('/v1/tenant/routes/:id/live', { schema: { tags:['tenant'], params:{type:'object',required:['id'],properties:{id:uuid}} } }, async request => {
     const {identity}=await authenticate(request,pools); if(identity.role!=='admin'||identity.scope!=='tenant') forbidden();
@@ -40,7 +63,7 @@ export function registerMobileRoutes(app: FastifyInstance, pools: DbPools, confi
       const route=await client.query('SELECT id,status,courier_membership_id,started_at FROM app.delivery_routes WHERE id=$1',[id]);
       if(!route.rowCount) notFound();
       const stops=await client.query('SELECT s.delivery_id,s.position,s.status,d.customer_id,d.destination_snapshot FROM app.delivery_route_stops s JOIN app.deliveries d ON d.id=s.delivery_id AND d.tenant_id=s.tenant_id WHERE s.route_id=$1 ORDER BY s.position',[id]);
-      const points=await client.query("SELECT latitude,longitude,accuracy_m,captured_at,received_at FROM app.delivery_route_locations WHERE route_id=$1 AND captured_at>now()-interval '30 days' ORDER BY captured_at",[id]);
+      const points=await client.query("SELECT latitude,longitude,accuracy_m,captured_at,received_at FROM app.delivery_route_locations WHERE route_id=$1 AND captured_at>now()-($2::int * interval '1 day') AND accuracy_m<=$3 ORDER BY captured_at",[id,config.gpsMaxAgeDays??30,config.gpsLowPrecisionThresholdM??200]);
       return {route:route.rows[0],stops:stops.rows,points:points.rows};
     });
   });
@@ -79,7 +102,7 @@ export function registerMobileRoutes(app: FastifyInstance, pools: DbPools, confi
     });
   });
 
-  app.put('/v1/mobile/profile/photo', { schema: { tags: ['mobile'] } }, async request => {
+  app.put('/v1/mobile/profile/photo', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } }, schema: { tags: ['mobile'] } }, async request => {
     const { identity } = await authenticate(request,pools);
     if (identity.role !== 'courier' || identity.scope !== 'tenant') forbidden();
     let photo: Buffer | null = null;
@@ -119,7 +142,7 @@ export function registerMobileRoutes(app: FastifyInstance, pools: DbPools, confi
     return reply.send(readPhoto(config,key));
   });
 
-  app.put('/v1/mobile/profile/cover', { schema: { tags: ['mobile'] } }, async request => {
+  app.put('/v1/mobile/profile/cover', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } }, schema: { tags: ['mobile'] } }, async request => {
     const { identity } = await authenticate(request,pools);
     if (identity.role !== 'courier' || identity.scope !== 'tenant') forbidden();
     let photo: Buffer | null = null;
