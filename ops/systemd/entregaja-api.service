@@ -1,0 +1,14 @@
+[Unit]
+Description=Entrega Ja API de teste
+Requires=entregaja-db.service
+After=entregaja-db.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/yure/Entregas/apps/api
+ExecStart=/home/yure/.cache/entregaja-tools/node26/bin/node --env-file=.env --import tsx src/main.ts
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

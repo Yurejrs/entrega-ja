@@ -1,0 +1,14 @@
+{
+  "name": "entregas",
+  "private": true,
+  "packageManager": "pnpm@11.25.0",
+  "engines": { "node": ">=26 <27" },
+  "scripts": {
+    "dev:api": "pnpm --filter @entregas/api dev",
+    "dev:web": "pnpm --filter @entregas/web dev",
+    "dev:mobile": "pnpm --filter @entregas/mobile start",
+    "build": "pnpm --filter @entregas/api build",
+    "test": "pnpm --filter @entregas/api test",
+    "typecheck": "pnpm --filter @entregas/api typecheck"
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "name": "@entregas/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=26 <27" },
+  "scripts": {
+    "dev": "node --env-file=.env --import tsx --watch src/main.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/main.js",
+    "bootstrap": "node --env-file=.env --import tsx src/cli/bootstrap.ts",
+    "worker": "node --env-file=.env --import tsx src/worker.ts",
+    "worker:prod": "node dist/worker.js",
+    "test": "NODE_ENV=test node --import tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@fastify/cookie": "11.1.5",
+    "@fastify/multipart": "10.1.9",
+    "@fastify/rate-limit": "11.2.2",
+    "@fastify/swagger": "9.9.5",
+    "@fastify/swagger-ui": "6.1.4",
+    "argon2": "0.45.2",
+    "fastify": "5.12.8",
+    "firebase-admin": "14.5.1",
+    "pg": "8.23.1",
+    "sharp": "0.35.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "@types/pg": "^8.15.0",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3"
+  }
+}

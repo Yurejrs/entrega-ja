@@ -1,0 +1,76 @@
+:root {
+  color-scheme: light dark;
+  --color-primary: #0F4C5C;
+  --color-primary-soft: #E3F0F3;
+  --color-page: #F4F7F8;
+  --color-surface: #FFFFFF;
+  --color-border: #DDE5E8;
+  --color-field-border: #C5D2D7;
+  --color-text: #10242B;
+  --color-text-secondary: #46565E;
+  --color-sidebar: #0F2F38;
+  --color-sidebar-active: #1B5666;
+  --color-sidebar-text: #B9CDD3;
+  --color-warning-bg: #FFF3D6;
+  --color-warning-text: #5A4200;
+  --color-success-bg: #DDF3E4;
+  --color-success-text: #0B4F2E;
+  --color-danger-bg: #FBE8E6;
+  --color-danger-text: #8E302A;
+  --color-danger-solid: #8E302A;
+  --color-on-primary: #FFFFFF;
+  --color-overlay: rgb(16 36 43 / 62%);
+  --color-sidebar-divider: rgb(255 255 255 / 18%);
+  --sheet-shadow: 0 -8px 32px rgb(16 36 43 / 18%);
+  --font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-page-title: 700 28px/1.15 var(--font-family);
+  --font-card-title: 700 16px/1.3 var(--font-family);
+  --font-body: 400 14px/1.5 var(--font-family);
+  --font-caption: 400 13px/1.4 var(--font-family);
+  --font-label: 600 12px/1.3 var(--font-family);
+  --font-kpi: 700 32px/1 var(--font-family);
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --radius-field: 12px;
+  --radius-card: 16px;
+  --radius-sheet: 24px;
+  --radius-pill: 999px;
+  --shadow-card: 0 4px 18px rgb(16 36 43 / 6%);
+  --focus-ring: 0 0 0 2px var(--color-primary);
+}
+
+@media (min-width: 1024px) {
+  :root { --font-page-title: 700 30px/1.15 var(--font-family); --font-kpi: 700 36px/1 var(--font-family); }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-primary: #6CC0D3;
+    --color-page: #10242B;
+    --color-surface: #18353D;
+    --color-border: #31515A;
+    --color-field-border: #52707A;
+    --color-text: #F4F7F8;
+    --color-text-secondary: #C5D2D7;
+    --color-primary-soft: #214B56;
+    --color-on-primary: #08222A;
+    --color-sidebar: #0A1E24;
+    --color-sidebar-active: #1B4552;
+    --color-sidebar-text: #C5D8DE;
+    --color-danger-bg: #5A2420;
+    --color-danger-text: #FFD9D5;
+    --color-danger-solid: #8E302A;
+    --color-overlay: rgb(0 0 0 / 70%);
+    --sheet-shadow: 0 -8px 32px rgb(0 0 0 / 50%);
+    --color-warning-bg: #594514;
+    --color-warning-text: #FFF3D6;
+    --color-success-bg: #164C32;
+    --color-success-text: #DDF3E4;
+  }
+}

@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.codex-attachments/
+apps/mobile/.expo/
+.env
+.env.*
+!.env.example
+coverage/
+private-files/
+apps/mobile/google-services.json
+apps/mobile/android/app/google-services.json
+**/*.keystore
+**/*.jks
+**/*.p12
+releases/*.apk

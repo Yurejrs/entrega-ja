@@ -1,0 +1,18 @@
+[Unit]
+Description=Entrega Ja FCM notification worker
+Requires=entregaja-db.service
+After=entregaja-db.service entregaja-api.service
+ConditionPathExists=/home/yure/.config/entregaja/firebase-admin.json
+
+[Service]
+Type=simple
+ExecCondition=/usr/bin/grep -q '^FCM_PROJECT_ID=.' /home/yure/Entregas/apps/api/.env
+WorkingDirectory=/home/yure/Entregas/apps/api
+EnvironmentFile=/home/yure/Entregas/apps/api/.env
+Environment=GOOGLE_APPLICATION_CREDENTIALS=/home/yure/.config/entregaja/firebase-admin.json
+ExecStart=/home/yure/.cache/entregaja-tools/node26/bin/node --env-file=.env --import tsx src/worker.ts
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target

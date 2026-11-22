@@ -1,0 +1,13 @@
+[Unit]
+Description=Entrega Ja PostgreSQL de teste
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/yure/Entregas
+ExecStart=/home/yure/Entregas/db/manage.sh up
+ExecStop=-/home/yure/Entregas/db/manage.sh down
+TimeoutStartSec=60
+
+[Install]
+WantedBy=default.target

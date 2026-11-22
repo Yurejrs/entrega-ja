@@ -1,0 +1,4 @@
+import { View, Text } from 'react-native';
+import Svg,{Circle,Path} from 'react-native-svg';
+export const brand={petroleum:'#0F4C5C',petroleumDark:'#072A35',petroleumLight:'#EEF4F5',accent:'#D6A94F',text:'#12202A',muted:'#6B7C87',surface:'#F4F7F8',border:'#E6EBEE',success:'#2E7D5B',warning:'#C8641E',danger:'#B3433B'};
+export function Logo({dark=false}:{dark?:boolean}){const color=dark?'#8DBBC6':brand.petroleum;return <View style={{flexDirection:'row',alignItems:'center',gap:9}}><Svg width={42} height={42} viewBox="0 0 48 48"><Circle cx={10} cy={38} r={4.5} fill="none" stroke={color} strokeWidth={3.5}/><Path d="M15 38H29a7 7 0 0 0 0-14H19a7 7 0 0 1 0-14H33" fill="none" stroke={color} strokeWidth={3.5} strokeLinecap="round" strokeLinejoin="round"/><Circle cx={39} cy={10} r={4.5} fill={brand.accent}/></Svg><Text style={{fontFamily:'Inter_400Regular',fontSize:27,color:dark?'#E6EEF1':color}}>Entrega <Text style={{fontFamily:'Inter_600SemiBold'}}>Já</Text></Text></View>}

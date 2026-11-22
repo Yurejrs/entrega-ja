@@ -1,0 +1,18 @@
+import type { ReactNode, ButtonHTMLAttributes, InputHTMLAttributes, SelectHTMLAttributes } from 'react';
+import { AlertTriangle, Box, CheckCircle2, Clock3, PackageOpen, Search } from 'lucide-react';
+
+export function VolumeIcon({ size = 17 }: { size?: number }) { return <Box size={size} strokeWidth={1.8} aria-hidden="true" />; }
+export function StatusChip({ status, children }: { status: string; children: ReactNode }) { return <span className={`status status-${status}`}><span className="status-dot" aria-hidden="true" />{children}</span>; }
+export function StatusBadge({ status, children }: { status: string; children: ReactNode }) { return <StatusChip status={status}>{children}</StatusChip>; }
+export function EmptyState({ title, message, icon = 'package', action }: { title: string; message: string; icon?: 'package'|'clock'|'alert'; action?: ReactNode }) { const Icon = icon === 'clock' ? Clock3 : icon === 'alert' ? AlertTriangle : PackageOpen; return <div className="empty-state"><Icon size={28} aria-hidden="true" /><strong>{title}</strong><span>{message}</span>{action}</div>; }
+export function Skeleton({ width = '100%', height = 18 }: { width?: string; height?: number }) { return <span className="skeleton" style={{ width, height }} aria-label="Carregando" />; }
+export function NoticeIcon({ ok = true }: { ok?: boolean }) { const Icon = ok ? CheckCircle2 : AlertTriangle; return <Icon size={18} aria-hidden="true" />; }
+export function PageHeader({ title, action, eyebrow = 'ENTREGA JÁ · GESTÃO' }: { title: string; action?: ReactNode; eyebrow?: string }) { return <header className="page-header"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1></div>{action}</header>; }
+export function Button({ variant = 'primary', children, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'primary'|'secondary'|'ghost' }) { return <button className={`button button-${variant}`} {...props}>{children}</button>; }
+export function TextField({ label, id, ...props }: InputHTMLAttributes<HTMLInputElement> & { label: string; id?: string }) { const inputId = id ?? `field-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`; return <label htmlFor={inputId}>{label}<input id={inputId} {...props} /></label>; }
+export function SelectField({ label, id, children, ...props }: SelectHTMLAttributes<HTMLSelectElement> & { label: string; id?: string }) { const selectId = id ?? `select-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`; return <label htmlFor={selectId}>{label}<select id={selectId} {...props}>{children}</select></label>; }
+export function SearchBar(props: InputHTMLAttributes<HTMLInputElement>) { return <label className="search-bar" htmlFor={props.id ?? 'search-input'}><span className="sr-only">Buscar</span><Search size={18} aria-hidden="true" /><input id={props.id ?? 'search-input'} type="search" placeholder="Buscar" {...props} /></label>; }
+export function Card({ children, className = '' }: { children: ReactNode; className?: string }) { return <section className={`stat-card ${className}`}>{children}</section>; }
+export function ListCard({ children, onClick }: { children: ReactNode; onClick?: () => void }) { return <article className="list-card" onClick={onClick}>{children}</article>; }
+export function KpiCard({ label, value, hint }: { label: string; value: ReactNode; hint?: string }) { return <section className="stat"><span>{label}</span><strong>{value}</strong>{hint && <small>{hint}</small>}</section>; }
+export function BottomSheet({ open, title, children }: { open: boolean; title: string; children: ReactNode }) { return open ? <section className="delivery-editor-modal" role="dialog" aria-modal="true" aria-label={title}>{children}</section> : null; }
