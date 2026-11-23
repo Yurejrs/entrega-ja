@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 adb_bin="${ADB_BIN:-adb}"
-apk="${APK_PATH:-$(cd "$(dirname "$0")/.." && pwd)/releases/entrega-ja-android-v1.0.0-beta.1.apk}"
+apk="${APK_PATH:-$(cd "$(dirname "$0")/.." && pwd)/releases/entrega-ja-android-v1.0.0-beta.1.1.apk}"
 package='com.kynesis.entregaja'
-expected_version='1.0.0-beta.1'
-expected_version_code='23'
+expected_version='1.0.0-beta.1.1'
+expected_version_code='24'
 if [[ ! -s "$apk" ]]; then echo "APK não encontrado: $apk" >&2; exit 1; fi
 if ! command -v "$adb_bin" >/dev/null 2>&1; then echo "ADB não encontrado: $adb_bin" >&2; exit 1; fi
 connected="$($adb_bin devices | awk '$2 == "device" { count++ } END { print count+0 }')"

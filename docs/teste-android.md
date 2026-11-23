@@ -1,4 +1,4 @@
-# Homologação do Android — Entrega Já 1.0.0-beta.1
+# Homologação do Android — Entrega Já 1.0.0-beta.1.1
 
 ## Preparação
 

@@ -61,10 +61,13 @@ test('full API flow with real PostgreSQL roles', async () => {
     assert.ok(openapi.paths?.['/auth/login']);
     assert.ok(openapi.paths?.['/deliveries']);
     assert.ok(openapi.paths?.['/mobile/location-consent']);
+    assert.ok(openapi.paths?.['/mobile/location-sharing']);
+    assert.ok(openapi.paths?.['/mobile/location-sharing/locations']);
     assert.ok(openapi.paths?.['/mobile/routes/{id}/locations']);
     assert.ok(openapi.paths?.['/mobile/routes/{id}/cancel']);
     assert.ok(openapi.paths?.['/tenant/customers']);
     assert.ok(openapi.paths?.['/tenant/routes/{id}/live']);
+    assert.ok(openapi.paths?.['/tenant/live-locations/stream']);
     const platformEmail = `platform-${randomUUID()}@test.local`;
     const password = 'test-123';
     await pools.auth.query(`INSERT INTO app.users(email,password_hash,full_name,is_platform_admin)
@@ -209,6 +212,18 @@ test('full API flow with real PostgreSQL roles', async () => {
     assert.equal(blockedStart.status,400,JSON.stringify(blockedStart.data));
     const locationConsent = await call(app,'POST','/v1/mobile/location-consent',{policyVersion:'1.0.0'},courier);
     assert.equal(locationConsent.status,200,JSON.stringify(locationConsent.data));
+    const sharingBefore = await call(app,'GET','/v1/mobile/location-sharing',undefined,courier);
+    assert.equal(sharingBefore.data.enabled,false);
+    const sharingEnabled = await call(app,'PUT','/v1/mobile/location-sharing',{enabled:true},courier);
+    assert.equal(sharingEnabled.status,200,JSON.stringify(sharingEnabled.data));
+    const livePoint = {clientPointId:randomUUID(),latitude:-3.7321,longitude:-38.5269,accuracyM:12,capturedAt:new Date().toISOString()};
+    const liveLocation = await call(app,'POST','/v1/mobile/location-sharing/locations',{points:[livePoint]},courier);
+    assert.equal(liveLocation.status,200,JSON.stringify(liveLocation.data));
+    assert.equal(liveLocation.data.accepted,1);
+    const sharingDashboard = await call(app,'GET','/v1/tenant/dashboard?period=day',undefined,admin);
+    assert.ok(sharingDashboard.data.liveCouriers.some((row:{sharing_id:string;latitude:number}) => row.sharing_id===courierMembershipId && Number(row.latitude)===livePoint.latitude));
+    const sharingDisabled = await call(app,'PUT','/v1/mobile/location-sharing',{enabled:false},courier);
+    assert.equal(sharingDisabled.data.enabled,false);
     const startedRoute = await call(app,'POST',`/v1/mobile/routes/${route.data.id}/start`,{},courier);
     assert.equal(startedRoute.status,200,JSON.stringify(startedRoute.data));
     const courierRouteStatus = await call(app,'GET',`/v1/mobile/routes/${route.data.id}`,undefined,courier);

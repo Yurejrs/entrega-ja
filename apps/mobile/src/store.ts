@@ -19,5 +19,6 @@ export const {
   applySync,
   reset,
   queueRoutePoint, routePoints, removeRoutePoints, discardRoutePoints,
+  queueLivePoint, liveLocationPoints, removeLiveLocationPoints, discardLiveLocationPoints,
 } = store;
 export type { Operation } from './store-core';

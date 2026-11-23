@@ -1,11 +1,11 @@
-# Checklist de release 1.0.0-beta.1
+# Checklist de release 1.0.0-beta.1.1
 
 ## Implementado nesta preparação
 
 - A fila GPS drena todos os lotes pendentes, com mutex por rota para evitar chamadas concorrentes.
 - O envio GPS repete falhas transitórias com backoff e preserva lotes quando a API não confirma todos os IDs.
 - O servidor devolve os `clientPointId` confirmados; o Android só remove pontos depois dessa confirmação.
-- API, mobile e configuração Android estão alinhados em `1.0.0-beta.1`; o `versionCode` foi incrementado para `23`.
+- API, mobile e configuração Android estão alinhados em `1.0.0-beta.1.1`; o `versionCode` foi incrementado para `24`.
 - O APK release não usa a assinatura de debug e falha explicitamente sem uma keystore de produção.
 - O manifesto principal desabilita tráfego HTTP em release; o manifesto de debug continua permitindo o ambiente local.
 - O smoke test e o roteiro Android apontam para o artefato `v1.0.0-beta.1`.

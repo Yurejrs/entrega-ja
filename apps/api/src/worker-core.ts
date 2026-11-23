@@ -74,6 +74,8 @@ export function createNotificationWorker(pools: DbPools, config: ApiConfig, send
   async function cleanupOrphans() {
     const expiredLocations = await pools.worker.query(`DELETE FROM app.delivery_route_locations
       WHERE captured_at < now() - interval '30 days'`);
+    const expiredCourierLocations = await pools.worker.query(`DELETE FROM app.courier_locations
+      WHERE captured_at < now() - interval '30 days'`);
     const expiredPhotos = await pools.worker.query<{ storage_key: string }>(
       'SELECT storage_key FROM app.expired_delivery_photo_keys()');
     if (expiredPhotos.rows.length) await pools.worker.query(
@@ -92,7 +94,7 @@ export function createNotificationWorker(pools: DbPools, config: ApiConfig, send
       await unlink(path);
       removed++;
     }
-    return removed + (expiredLocations.rowCount ?? 0);
+    return removed + (expiredLocations.rowCount ?? 0) + (expiredCourierLocations.rowCount ?? 0);
   }
 
   return { recoverStale,processBatch,cleanupOrphans,recordHeartbeat };

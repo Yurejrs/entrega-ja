@@ -1,5 +1,78 @@
+import { CourierMap } from './CourierMap';
 import{useEffect,useRef,useState,type FormEvent}from'react';import{Medal,Plus,Target,Trophy,Users,X}from'lucide-react';import{api,latestDashboardData}from'./api';import{VolumeIcon}from'./design-system';
 type Row=Record<string,unknown>;type List={items:Row[]};
+
+type VolumeDraft = { id?: string; name: string; iconKey: string };
+
+export function VolumeCatalog({items, refresh}: {items: Row[]; refresh: () => void}) {
+  const [draft, setDraft] = useState<VolumeDraft | null>(null);
+  const [suggestions, setSuggestions] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const dialog = useRef<HTMLDialogElement>(null);
+
+  function openEditor(volume: VolumeDraft) {
+    setDraft(volume);
+    setError('');
+    dialog.current?.showModal();
+  }
+
+  async function save(archive = false) {
+    if (!draft || busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      const path = '/tenant/delivery-items' + (draft.id ? '/' + draft.id : '');
+      await api(path, { method: draft.id ? 'PATCH' : 'POST',
+        body: JSON.stringify(archive ? { archived: true } : { name: draft.name.trim(), iconKey: draft.iconKey }),
+      });
+      dialog.current?.close();
+      refresh();
+    } catch (e) { setError((e as Error).message); }
+    finally { setBusy(false); }
+  }
+
+  return <section className="volume-catalog">
+    <div className="volume-catalog-actions">
+      <button onClick={() => openEditor({name:'',iconKey:'box'})}>+ Novo volume</button>
+      <button className="secondary-action" aria-expanded={suggestions} onClick={() => setSuggestions(!suggestions)}>Volumes comuns</button>
+    </div>
+    {suggestions && <section className="volume-presets"><h2>Sugestões de volumes</h2><div className="preset-grid">
+      {volumePresets.map(preset => {
+        const exists = items.some(item => String(item.name).toLocaleLowerCase('pt-BR') === preset.name.toLocaleLowerCase('pt-BR'));
+        return <button key={preset.iconKey} disabled={exists} onClick={() => openEditor(preset)}>
+          <VolumeIcon iconKey={preset.iconKey}/>{preset.name}{exists && <small>Já cadastrado</small>}
+        </button>;
+      })}
+    </div></section>}
+    <h2>Volumes cadastrados</h2>
+    {items.length === 0 && <p>Nenhum volume cadastrado.</p>}
+    {items.map(item => <div key={String(item.id)} className="volume-catalog-row">
+      <span><VolumeIcon iconKey={item.icon_key}/> {String(item.name)}</span>
+      <button className="secondary-action" aria-label={`Editar ${item.name}`} onClick={() =>
+        openEditor({id:String(item.id),name:String(item.name),iconKey:String(item.icon_key)})}>Editar</button>
+    </div>)}
+    <dialog className="volume-dialog" ref={dialog} aria-labelledby="volume-title" onClose={() => setDraft(null)}
+      onCancel={event => { if (busy) event.preventDefault(); }}>
+      {draft && <form className="editor" onSubmit={event => {event.preventDefault();void save();}}>
+        <h2 id="volume-title">{draft.id ? 'Editar volume' : 'Novo volume'}</h2>
+        <label>Nome do volume<input autoFocus required maxLength={100} value={draft.name} onChange={event => setDraft({...draft,name:event.target.value})}/></label>
+        <fieldset className="volume-glyph-picker"><legend>Ícone do volume</legend><div>
+          {Object.entries(volumeIcons).map(([key,label]) => <label key={key}>
+            <input type="radio" name="iconKey" checked={draft.iconKey === key} onChange={() => setDraft({...draft,iconKey:key})}/>
+            <VolumeIcon iconKey={key}/>{label}
+          </label>)}
+        </div></fieldset>
+        {error && <p className="alert" role="alert">{error}</p>}
+        <div className="volume-catalog-actions">
+          <button disabled={busy || !draft.name.trim()}>Salvar volume</button>
+          <button type="button" disabled={busy} className="secondary-action" onClick={() => dialog.current?.close()}>Cancelar</button>
+          {draft.id && <button type="button" disabled={busy} className="danger" onClick={() => void save(true)}>Arquivar</button>}
+        </div>
+      </form>}
+    </dialog>
+  </section>;
+}
 const deliveryStatuses:Record<string,string>={pending:'Pendente',assigned:'Atribuída',in_progress:'Em rota',problem:'Problema registrado',completed:'Concluída',cancelled:'Cancelada'};
 const eventKinds:Record<string,string>={created:'Criada',assigned:'Atribuída',reassigned:'Reatribuída',viewed:'Visualizada',check_in:'Check-in',completed:'Concluída',problem:'Problema registrado',cancelled:'Cancelada',note:'Atualizada'};
 const volumeIcons:Record<string,string>={market:'Feira',gas:'Gás',water:'Água',box:'Caixa',food:'Alimento',medicine:'Medicamento',document:'Documento',other:'Outro'};
@@ -11,7 +84,6 @@ const specs:Record<string,{path:string;title:string;fields:Field[]}>= {
  customers:{path:'/tenant/customers',title:'Novo cliente',fields:[{key:'name',label:'Nome',required:true},{key:'phone',label:'Telefone'},{key:'email',label:'E-mail',type:'email'},{key:'notes',label:'Observações'}]},
  addresses:{path:'/tenant/addresses',title:'Novo endereço',fields:[{key:'customerId',label:'Cliente',required:true},{key:'label',label:'Identificação'},{key:'street',label:'Rua',required:true},{key:'number',label:'Número'},{key:'neighborhood',label:'Bairro'},{key:'city',label:'Cidade',required:true},{key:'state',label:'UF',required:true},{key:'postalCode',label:'CEP'}]},
   deliveries:{path:'/deliveries',title:'Nova entrega',fields:[{key:'customerId',label:'Cliente',required:true},{key:'addressId',label:'Endereço salvo'},{key:'instructions',label:'Instruções'},{key:'estimatedEarningsCents',label:'Valor estimado (centavos)',type:'number'},{key:'courierMembershipId',label:'Entregador'}]},
- 'delivery-items':{path:'/tenant/delivery-items',title:'Novo volume',fields:[{key:'name',label:'Nome',required:true},{key:'iconKey',label:'Ícone',required:true,options:Object.entries(volumeIcons).map(([value,label])=>({value,label}))}]},
  users:{path:'/tenant/invites',title:'Convidar usuário',fields:[{key:'email',label:'E-mail',type:'email',required:true},{key:'role',label:'Papel',required:true,options:[{value:'courier',label:'Entregador'},{value:'admin',label:'Administrador'}]}]},
  tenants:{path:'/platform/tenants',title:'Nova empresa',fields:[{key:'name',label:'Nome',required:true},{key:'adminEmail',label:'E-mail do administrador',type:'email',required:true},{key:'legalName',label:'Razão social'},{key:'cnpj',label:'CNPJ'},{key:'contactEmail',label:'E-mail de contato'}]},
  plans:{path:'/platform/plans',title:'Novo plano',fields:[{key:'name',label:'Nome',required:true},{key:'maxCouriers',label:'Máximo de entregadores',type:'number'},{key:'maxUsers',label:'Máximo de usuários',type:'number'},{key:'maxMonthlyDeliveries',label:'Entregas por mês',type:'number'},{key:'maxStorageBytes',label:'Armazenamento em bytes',type:'number'}]},
@@ -102,7 +174,7 @@ function choiceLabel(row: Row): string {
   return String(row.label ?? row.id ?? 'Registro');
 }
 
-export function Actions({ section, refresh }: { section: string; refresh: () => void }) {
+export function Actions({ section, filtersOpen, refresh }: { section: string; filtersOpen?: boolean; refresh: () => void }) {
   const spec = specs[section];
   const [open, setOpen] = useState(false);
   const [error, setError] = useState('');
@@ -171,7 +243,21 @@ export function Actions({ section, refresh }: { section: string; refresh: () => 
     };
   },[open,section]);
 
-  function resetEntry(){setCustomerId('');setInlineAddress(false);setClaimable(false);setSelectedVolumes({});}
+  const [chosenStreet,setChosenStreet] = useState({name:'',version:0});
+  useEffect(() => {
+    if (section !== 'addresses') return;
+    const selectStreet = (event: Event) => {
+      const name = (event as CustomEvent<string>).detail;
+      setChosenStreet(previous => ({name,version:previous.version+1}));
+      setError('');
+      setResult(null);
+      setOpen(true);
+      requestAnimationFrame(() => modalRef.current?.scrollIntoView({block:'start'}));
+    };
+    window.addEventListener('entregaja:use-street',selectStreet);
+    return () => window.removeEventListener('entregaja:use-street',selectStreet);
+  },[section]);
+  function resetEntry(){setChosenStreet({name:'',version:0});setCustomerId('');setInlineAddress(false);setClaimable(false);setSelectedVolumes({});}
   function openEntry(){resetEntry();setError('');setResult(null);setOpen(true);}
   function closeEntry(){setOpen(false);resetEntry();}
   useEffect(()=>{setOpen(false);resetEntry();setResult(null);},[section]);
@@ -242,29 +328,39 @@ export function Actions({ section, refresh }: { section: string; refresh: () => 
 
   async function exportDeliveries(){try{const params=new URLSearchParams();if(reportFrom)params.set('from',reportFrom);if(reportTo)params.set('to',reportTo);if(reportCourier)params.set('courierMembershipId',reportCourier);if(reportNeighborhood)params.set('neighborhood',reportNeighborhood);if(reportHourFrom)params.set('hourFrom',reportHourFrom);if(reportHourTo)params.set('hourTo',reportHourTo);const response=await fetch(`/v1/tenant/reports/deliveries.csv${params.toString()?`?${params}`:''}`,{credentials:'include'});if(!response.ok)throw new Error();const blob=await response.blob();const url=URL.createObjectURL(blob);const link=document.createElement('a');link.href=url;link.download='entregas.csv';link.click();URL.revokeObjectURL(url)}catch{setError('Não foi possível exportar o relatório agora.')}}
   return <>
-    {section==='deliveries'&&<><div className="report-filters" aria-label="Filtros do relatório"><label>De<input type="date" value={reportFrom} onChange={event=>setReportFrom(event.target.value)}/></label><label>Até<input type="date" value={reportTo} onChange={event=>setReportTo(event.target.value)}/></label><label>Entregador<select value={reportCourier} onChange={event=>setReportCourier(event.target.value)}><option value="">Todos</option>{reportCouriers.map(courier=><option key={String(courier.membership_id)} value={String(courier.membership_id)}>{String(courier.full_name??courier.email)}</option>)}</select></label><label>Bairro<input value={reportNeighborhood} onChange={event=>setReportNeighborhood(event.target.value)} placeholder="Todos"/></label><label>Hora inicial<input type="number" min="0" max="23" value={reportHourFrom} onChange={event=>setReportHourFrom(event.target.value)} placeholder="0"/></label><label>Hora final<input type="number" min="0" max="23" value={reportHourTo} onChange={event=>setReportHourTo(event.target.value)} placeholder="23"/></label></div><button type="button" className="secondary-action" onClick={exportDeliveries}>Exportar CSV filtrado</button><button type="button" className="secondary-action" onClick={()=>window.print()}>Exportar PDF</button></>}
+    {section==='deliveries'&&filtersOpen&&<><div className="report-filters" aria-label="Filtros do relatório"><label>De<input type="date" value={reportFrom} onChange={event=>setReportFrom(event.target.value)}/></label><label>Até<input type="date" value={reportTo} onChange={event=>setReportTo(event.target.value)}/></label><label>Entregador<select value={reportCourier} onChange={event=>setReportCourier(event.target.value)}><option value="">Todos</option>{reportCouriers.map(courier=><option key={String(courier.membership_id)} value={String(courier.membership_id)}>{String(courier.full_name??courier.email)}</option>)}</select></label><label>Bairro<input value={reportNeighborhood} onChange={event=>setReportNeighborhood(event.target.value)} placeholder="Todos"/></label><label>Hora inicial<input type="number" min="0" max="23" value={reportHourFrom} onChange={event=>setReportHourFrom(event.target.value)} placeholder="0"/></label><label>Hora final<input type="number" min="0" max="23" value={reportHourTo} onChange={event=>setReportHourTo(event.target.value)} placeholder="23"/></label></div><button type="button" className="secondary-action" onClick={exportDeliveries}>Exportar CSV filtrado</button><button type="button" className="secondary-action" onClick={()=>window.print()}>Exportar PDF</button></>}
     {!(open&&section==='deliveries')&&<button ref={triggerRef} className="action-trigger" type="button" onClick={() => open?closeEntry():openEntry()}>
       {open?<X size={16} aria-hidden="true"/>:<Plus size={16} aria-hidden="true"/>}{open ? 'Fechar' : spec.title}
     </button>}
     {open&&section==='deliveries'&&<button type="button" className="delivery-modal-backdrop" aria-label="Fechar cadastro de entrega" onClick={closeEntry}/>}
-    {open && <form ref={section==='deliveries'?modalRef:undefined} className={`editor${section==='deliveries'?' delivery-editor-modal':''}`} role={section==='deliveries'?'dialog':undefined} aria-modal={section==='deliveries'?true:undefined} aria-labelledby={section==='deliveries'?'delivery-form-title':undefined} onSubmit={submit}>
-      {section==='deliveries'&&<button type="button" className="modal-dismiss" onClick={closeEntry}>Fechar</button>}
-      <h2 id={section==='deliveries'?'delivery-form-title':undefined}>{spec.title}</h2>
+    {open && <form ref={modalRef} className={`editor${section==='deliveries'?' delivery-editor-modal':''}`} role={section==='deliveries'?'dialog':undefined} aria-modal={section==='deliveries'?true:undefined} aria-labelledby={section==='deliveries'?'delivery-form-title':undefined} onSubmit={submit}>
+      <div className="entry-heading"><h2 id={section==='deliveries'?'delivery-form-title':undefined}>{spec.title}</h2>
+        {section==='deliveries'&&<button type="button" className="modal-dismiss" onClick={closeEntry}>Fechar</button>}
+      </div>
       {loadingChoices && <p>Carregando opções…</p>}
-      <div className="fields">{spec.fields.filter(field=>!(section==='deliveries'&&inlineAddress&&field.key==='addressId')&&!(section==='deliveries'&&claimable&&field.key==='courierMembershipId')).map(field =>
-        <label key={field.key}>{field.label}{renderField(field)}</label>)}</div>
-      {section==='deliveries'&&<>
-        <section className="volume-picker"><div className="volume-picker-heading"><div><h3>Volumes da entrega</h3><p>Selecione os itens e informe a quantidade.</p></div><span>{Object.values(selectedVolumes).filter(q=>Number(q)>0).length} selecionado(s)</span></div>{volumeOptions.length===0?<p className="empty-hint">O catálogo está vazio. Cadastre seus volumes na seção <b>Volumes</b> antes de criar a entrega.</p>:<div className="volume-options">{volumeOptions.map(volume=>{const id=String(volume.id);const selected=selectedVolumes[id]!==undefined;return <div className={`volume-option${selected?' selected':''}`} key={id}><label><input type="checkbox" checked={selected} onChange={event=>setSelectedVolumes(current=>{const next={...current};if(event.target.checked)next[id]='1';else delete next[id];return next})}/><span className="volume-icon"><VolumeIcon/></span><span className="volume-name">{String(volume.name)}</span></label>{selected&&<label className="volume-quantity">Qtd.<input aria-label={`Quantidade de ${String(volume.name)}`} type="number" min="1" max="999" value={selectedVolumes[id]} onChange={event=>setSelectedVolumes(current=>({...current,[id]:event.target.value}))}/></label>}</div>})}</div>}</section>
-        <label className="inline-toggle"><input type="checkbox" checked={inlineAddress} onChange={e=>setInlineAddress(e.target.checked)}/> Cadastrar endereço do cliente nesta entrega</label>
-        {inlineAddress&&<div className="fields">{[['new_label','Identificação'],['new_street','Rua'],['new_number','Número'],['new_complement','Complemento'],['new_neighborhood','Bairro'],['new_city','Cidade'],['new_state','UF'],['new_postalCode','CEP']].map(([name,label])=><label key={name}>{label}<input name={name} required={['new_street','new_city','new_state'].includes(name)} list={['new_street','new_neighborhood','new_city'].includes(name)?`localities-${name}`:undefined}/>{['new_street','new_neighborhood','new_city'].includes(name)&&<datalist id={`localities-${name}`}>{localities.filter(x=>name==='new_street'?x.category==='street':name==='new_neighborhood'?x.category==='neighborhood':x.category==='locality').map((x,i)=><option key={`${x.name}-${i}`} value={String(x.name)}/>)}</datalist>}</label>)}</div>}
+      {section === 'addresses' && <AddressLookup/>}
+      <div className="fields">{spec.fields.map(field => {
+        if (section === 'addresses' && field.key === 'street') return <StreetField key={chosenStreet.version} name="street" initialStreet={chosenStreet.name}/>;
+        if (section === 'deliveries' && field.key === 'addressId') return <div key={field.key} className="delivery-choice-group">
+          {!inlineAddress && <label>{field.label}{renderField(field)}</label>}
+        <label className="inline-toggle"><input type="checkbox" checked={inlineAddress} onChange={e=>setInlineAddress(e.target.checked)}/> Cadastrar novo endereço</label>
+        {inlineAddress && <AddressLookup prefix="new_"/>}
+        {inlineAddress&&<div className="fields">{[['new_label','Identificação'],['new_street','Rua'],['new_number','Número'],['new_complement','Complemento'],['new_neighborhood','Bairro'],['new_city','Cidade'],['new_state','UF'],['new_postalCode','CEP']].map(([name,label])=>name==='new_street'?<StreetField name={name} key={name}/>:<label key={name}>{label}<input name={name} required={['new_street','new_city','new_state'].includes(name)} list={['new_street','new_neighborhood','new_city'].includes(name)?`localities-${name}`:undefined}/>{['new_street','new_neighborhood','new_city'].includes(name)&&<datalist id={`localities-${name}`}>{localities.filter(x=>name==='new_street'?x.category==='street':name==='new_neighborhood'?x.category==='neighborhood':x.category==='locality').map((x,i)=><option key={`${x.name}-${i}`} value={String(x.name)}/>)}</datalist>}</label>)}</div>}
+        </div>;
+        if (section === 'deliveries' && field.key === 'courierMembershipId') return <div key={field.key} className="delivery-choice-group">
+          <label>{field.label}{renderField(field)}</label>
         <label className="inline-toggle"><input type="checkbox" checked={claimable} onChange={e=>setClaimable(e.target.checked)}/> Disponível para quem aceitar primeiro</label>
+        </div>;
+        return <label key={field.key}>{field.label}{renderField(field)}</label>;
+      })}</div>
+      {section==='deliveries'&&<>
+        <section className="volume-picker"><div className="volume-picker-heading"><div><h3>Volumes da entrega</h3><p>Selecione os itens e informe a quantidade.</p></div><span>{Object.values(selectedVolumes).filter(q=>Number(q)>0).length} selecionado(s)</span></div>{volumeOptions.length===0?<p className="empty-hint">O catálogo está vazio. Cadastre seus volumes na seção <b>Volumes</b> antes de criar a entrega.</p>:<div className="volume-options">{volumeOptions.map(volume=>{const id=String(volume.id);const selected=selectedVolumes[id]!==undefined;return <div className={`volume-option${selected?' selected':''}`} key={id}><label><input type="checkbox" checked={selected} onChange={event=>setSelectedVolumes(current=>{const next={...current};if(event.target.checked)next[id]='1';else delete next[id];return next})}/><span className="volume-icon"><VolumeIcon iconKey={volume.icon_key}/></span><span className="volume-name">{String(volume.name)}</span></label>{selected&&<label className="volume-quantity">Qtd.<input aria-label={`Quantidade de ${String(volume.name)}`} type="number" min="1" max="999" value={selectedVolumes[id]} onChange={event=>setSelectedVolumes(current=>({...current,[id]:event.target.value}))}/></label>}</div>})}</div>}</section>
       </>}
       <button type="submit" disabled={loadingChoices || missingRequiredChoice || !!choiceError}>{section==='deliveries'?'Criar entrega':'Salvar'}</button>
       {choiceError && <div className="alert">{choiceError} <button type="button" onClick={() => setReloadChoices(value => value + 1)}>Tentar novamente</button></div>}
       {error && <div className="alert">{error}</div>}
     </form>}
-    {section==='addresses'&&<OperationArea/>}
-    {section==='delivery-items'&&<VolumePresets refresh={refresh}/> }
+    {section==='addresses'&&<details><summary>Configurar área de operação</summary><OperationArea/></details>}
     {toast && result && <div className="toast" role="status">{toast}
       {typeof (result.adminInvite as Row | undefined)?.token === 'string' || typeof result.token === 'string'
         ? <p>Link de acesso: <a href={inviteLink(String((result.adminInvite as Row | undefined)?.token ?? result.token))}>
@@ -274,11 +370,10 @@ export function Actions({ section, refresh }: { section: string; refresh: () => 
   </>;
 }
 
-function OperationArea(){const[message,setMessage]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false);async function submit(e:FormEvent<HTMLFormElement>){e.preventDefault();setBusy(true);setError('');setMessage('');const f=new FormData(e.currentTarget);try{const r=await api<{imported:number}>('/tenant/localities/import',{method:'POST',body:JSON.stringify({location:String(f.get('location')),radiusM:Number(f.get('radiusM'))})});setMessage(`${r.imported} ruas e localidades importadas.`)}catch(err){setError((err as Error).message)}finally{setBusy(false)}}return <section className="location-editor"><h3>Área de operação</h3><p>Importe ruas e localidades próximas para sugerir no cadastro de endereços.</p><form onSubmit={submit}><label>Endereço, cidade e estado<input name="location" required placeholder="Centro, Fortaleza, CE"/></label><label>Raio de busca<select name="radiusM" defaultValue="2000">{[500,1000,2000,3000,5000].map(n=><option value={n} key={n}>{n>=1000?`${n/1000} km`:`${n} m`}</option>)}</select></label><button disabled={busy}>{busy?'Importando…':'Importar ruas e bairros próximos'}</button></form><small>Dados <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors · ODbL</a></small>{message&&<div className="notice">{message}</div>}{error&&<div className="alert">{error}</div>}</section>}
+function OperationArea(){const[message,setMessage]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false);async function submit(e:FormEvent<HTMLFormElement>){e.preventDefault();setBusy(true);setError('');setMessage('');const f=new FormData(e.currentTarget);try{const r=await api<{imported:number}>('/tenant/localities/import',{method:'POST',body:JSON.stringify({location:String(f.get('location')),radiusM:Number(f.get('radiusM'))})});window.dispatchEvent(new Event('entregaja:streets-imported'));setMessage(`${r.imported} ruas e localidades importadas.`)}catch(err){setError((err as Error).message)}finally{setBusy(false)}}return <section className="location-editor"><h3>Área de operação</h3><p>Importe ruas e localidades próximas para sugerir no cadastro de endereços.</p><form onSubmit={submit}><label>Endereço, cidade e estado<input name="location" required placeholder="Centro, Fortaleza, CE"/></label><label>Raio de busca<select name="radiusM" defaultValue="2000">{[500,1000,2000,3000,5000].map(n=><option value={n} key={n}>{n>=1000?`${n/1000} km`:`${n} m`}</option>)}</select></label><button disabled={busy}>{busy?'Importando…':'Importar ruas e bairros próximos'}</button></form><small>Dados <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors · ODbL</a></small>{message&&<div className="notice">{message}</div>}{error&&<div className="alert">{error}</div>}</section>}
 
-function VolumePresets({refresh}:{refresh:()=>void}){const[busy,setBusy]=useState(''),[added,setAdded]=useState<string[]>([]),[error,setError]=useState('');useEffect(()=>{api<List>('/tenant/delivery-items').then(result=>setAdded(result.items.map(item=>String(item.name).toLocaleLowerCase('pt-BR')))).catch(()=>{});},[]);async function add(preset:{name:string;iconKey:string}){setBusy(preset.name);setError('');try{await api('/tenant/delivery-items',{method:'POST',body:JSON.stringify(preset)});setAdded(current=>[...current,preset.name.toLocaleLowerCase('pt-BR')]);refresh()}catch(e){setError((e as Error).message)}finally{setBusy('')}}return <section className="volume-presets"><div><h2>Comece com os volumes mais comuns</h2><p>Adicione opções ao catálogo da sua empresa. Você também pode cadastrar um volume personalizado.</p></div><div className="preset-grid">{volumePresets.map(preset=>{const exists=added.includes(preset.name.toLocaleLowerCase('pt-BR'));return <button key={preset.iconKey} disabled={!!busy||exists} onClick={()=>add(preset)}><VolumeIcon/><b>{exists?'Já adicionado':preset.name}</b>{!exists&&<small>Adicionar volume</small>}</button>})}</div>{error&&<div className="alert">{error}</div>}</section>}
 
-export function DeliveryDetail({id,onClose,refresh}:{id:string;onClose:()=>void;refresh:()=>void}){const[data,setData]=useState<Row|null>(null),[couriers,setCouriers]=useState<Row[]>([]),[error,setError]=useState('');useEffect(()=>{api<Row>(`/deliveries/${id}`).then(setData).catch(e=>setError(e.message));loadChoiceItems('/tenant/users?role=courier&status=active').then(setCouriers).catch(e=>setError((e as Error).message))},[id]);async function assign(e:FormEvent<HTMLFormElement>){e.preventDefault();try{await api(`/deliveries/${id}/assignment`,{method:'POST',body:JSON.stringify({courierMembershipId:String(new FormData(e.currentTarget).get('courier'))})});setData(await api<Row>(`/deliveries/${id}`));refresh()}catch(e){setError((e as Error).message)}}async function edit(e:FormEvent<HTMLFormElement>){e.preventDefault();try{const form=new FormData(e.currentTarget);const merchandiseDescription=String(form.get('merchandiseDescription')??'').trim();const instructions=String(form.get('instructions')).trim();const payload:Row={instructions:instructions||null};if(merchandiseDescription)payload.merchandiseDescription=merchandiseDescription;await api(`/deliveries/${id}`,{method:'PATCH',body:JSON.stringify(payload)});setData(await api<Row>(`/deliveries/${id}`));refresh();setError('')}catch(e){setError((e as Error).message)}}async function cancel(){if(!window.confirm('Cancelar esta entrega?'))return;try{await api(`/deliveries/${id}/cancel`,{method:'POST',body:'{}'});setData(await api<Row>(`/deliveries/${id}`));refresh()}catch(e){setError((e as Error).message)}}return <div className="detail"><button onClick={onClose}>← Voltar</button>{error&&<div className="alert">{error}</div>}{data&&<><h2>Entrega {id.slice(0,8)}</h2><p><b>Status:</b> {deliveryStatuses[String(data.status)]??String(data.status)}</p>{data.is_claimable===true&&<p className="notice">Disponível para retirada pelo primeiro entregador que aceitar.</p>}<p><b>Volumes:</b></p>{Array.isArray(data.items)&&data.items.length>0?<div className="delivery-item-list">{(data.items as Row[]).map(item=><div key={String(item.id)}><span>{volumeIcons[String(item.icon_key)]??'Caixa'}</span><b>{Number(item.quantity)}×</b> {String(item.name)}</div>)}</div>:<p>{String(data.merchandise_description)}</p>}<p><b>Destino:</b> {destinationText(data.destination_snapshot)}</p><p><b>Instruções:</b> {String(data.instructions??'—')}</p>{!['completed','cancelled'].includes(String(data.status))&&<><form onSubmit={edit}>{(!Array.isArray(data.items)||!data.items.length)&&<label>Descrição dos itens<input name="merchandiseDescription" required defaultValue={String(data.merchandise_description??'')}/></label>}<label>Instruções<input name="instructions" defaultValue={String(data.instructions??'')}/></label><button>Salvar entrega</button></form><form onSubmit={assign}><label>Entregador<select name="courier" required><option value="">Selecione</option>{couriers.map(c=><option key={String(c.membership_id)} value={String(c.membership_id)}>{String(c.full_name??c.email)}</option>)}</select></label><button disabled={!couriers.length}>Atribuir ou reatribuir</button></form><button className="danger" onClick={cancel}>Cancelar entrega</button></>}<LiveRoute routeId={typeof data.route_id==='string'?data.route_id:''}/><h3>Histórico</h3>{Array.isArray(data.events)?data.events.map((event:Row)=><div className="event" key={String(event.id)}><b>{eventKinds[String(event.kind)]??String(event.kind)}</b><span>{eventDate(event.occurred_at??event.recorded_at)}</span><p>{String(event.note??'')}</p></div>):null}<h3>Fotos</h3>{Array.isArray(data.photos)?data.photos.map((photo:Row)=><Photo key={String(photo.id)} id={String(photo.id)}/>):null}</>}</div>}
+export function DeliveryDetail({id,onClose,refresh}:{id:string;onClose:()=>void;refresh:()=>void}){const[data,setData]=useState<Row|null>(null),[couriers,setCouriers]=useState<Row[]>([]),[error,setError]=useState('');useEffect(()=>{api<Row>(`/deliveries/${id}`).then(setData).catch(e=>setError(e.message));loadChoiceItems('/tenant/users?role=courier&status=active').then(setCouriers).catch(e=>setError((e as Error).message))},[id]);async function assign(e:FormEvent<HTMLFormElement>){e.preventDefault();try{await api(`/deliveries/${id}/assignment`,{method:'POST',body:JSON.stringify({courierMembershipId:String(new FormData(e.currentTarget).get('courier'))})});setData(await api<Row>(`/deliveries/${id}`));refresh()}catch(e){setError((e as Error).message)}}async function edit(e:FormEvent<HTMLFormElement>){e.preventDefault();try{const form=new FormData(e.currentTarget);const merchandiseDescription=String(form.get('merchandiseDescription')??'').trim();const instructions=String(form.get('instructions')).trim();const payload:Row={instructions:instructions||null};if(merchandiseDescription)payload.merchandiseDescription=merchandiseDescription;await api(`/deliveries/${id}`,{method:'PATCH',body:JSON.stringify(payload)});setData(await api<Row>(`/deliveries/${id}`));refresh();setError('')}catch(e){setError((e as Error).message)}}async function cancel(){if(!window.confirm('Cancelar esta entrega?'))return;try{await api(`/deliveries/${id}/cancel`,{method:'POST',body:'{}'});setData(await api<Row>(`/deliveries/${id}`));refresh()}catch(e){setError((e as Error).message)}}return <div className="detail"><button onClick={onClose}>← Voltar</button>{error&&<div className="alert">{error}</div>}{data&&<><h2>Entrega {id.slice(0,8)}</h2><p><b>Status:</b> {deliveryStatuses[String(data.status)]??String(data.status)}</p>{data.is_claimable===true&&<p className="notice">Disponível para retirada pelo primeiro entregador que aceitar.</p>}<p><b>Volumes:</b></p>{Array.isArray(data.items)&&data.items.length>0?<div className="delivery-item-list">{(data.items as Row[]).map(item=><div key={String(item.id)}><VolumeIcon iconKey={item.icon_key}/><b>{Number(item.quantity)}×</b> {String(item.name)}</div>)}</div>:<p>{String(data.merchandise_description)}</p>}<p><b>Destino:</b> {destinationText(data.destination_snapshot)}</p><p><b>Instruções:</b> {String(data.instructions??'—')}</p>{!['completed','cancelled'].includes(String(data.status))&&<><form onSubmit={edit}>{(!Array.isArray(data.items)||!data.items.length)&&<label>Descrição dos itens<input name="merchandiseDescription" required defaultValue={String(data.merchandise_description??'')}/></label>}<label>Instruções<input name="instructions" defaultValue={String(data.instructions??'')}/></label><button>Salvar entrega</button></form><form onSubmit={assign}><label>Entregador<select name="courier" required><option value="">Selecione</option>{couriers.map(c=><option key={String(c.membership_id)} value={String(c.membership_id)}>{String(c.full_name??c.email)}</option>)}</select></label><button disabled={!couriers.length}>Atribuir ou reatribuir</button></form><button className="danger" onClick={cancel}>Cancelar entrega</button></>}<LiveRoute routeId={typeof data.route_id==='string'?data.route_id:''}/><h3>Histórico</h3>{Array.isArray(data.events)?data.events.map((event:Row)=><div className="event" key={String(event.id)}><b>{eventKinds[String(event.kind)]??String(event.kind)}</b><span>{eventDate(event.occurred_at??event.recorded_at)}</span><p>{String(event.note??'')}</p></div>):null}<h3>Fotos</h3>{Array.isArray(data.photos)?data.photos.map((photo:Row)=><Photo key={String(photo.id)} id={String(photo.id)}/>):null}</>}</div>}
 function LiveRoute({routeId}:{routeId:string}){
  const [data,setData]=useState<Row|null>(null),[error,setError]=useState('');
  useEffect(()=>{if(!routeId)return;let active=true;const load=()=>api<Row>(`/tenant/routes/${routeId}/live`).then(value=>{if(active){setData(value);setError('')}}).catch(e=>{if(active)setError((e as Error).message)});void load();const timer=setInterval(load,10_000);return()=>{active=false;clearInterval(timer)}},[routeId]);
@@ -297,7 +392,6 @@ function inviteLink(token:string){return new URL('/?invite='+encodeURIComponent(
 type Editable={path:string;fields:{key:string;column:string;label:string;type?:string}[];status?:{path:string;values:string[];column:string}};
 const editable:Record<string,Editable>={
  customers:{path:'/tenant/customers',fields:[{key:'name',column:'name',label:'Nome'},{key:'phone',column:'phone',label:'Telefone'},{key:'email',column:'email',label:'E-mail'},{key:'notes',column:'notes',label:'Observações'}]},
- 'delivery-items':{path:'/tenant/delivery-items',fields:[{key:'name',column:'name',label:'Nome do volume'}]},
  addresses:{path:'/tenant/addresses',fields:[{key:'label',column:'label',label:'Identificação'},{key:'street',column:'street',label:'Rua'},{key:'number',column:'number',label:'Número'},{key:'complement',column:'complement',label:'Complemento'},{key:'neighborhood',column:'neighborhood',label:'Bairro'},{key:'city',column:'city',label:'Cidade'},{key:'state',column:'state',label:'UF'},{key:'postalCode',column:'postal_code',label:'CEP'}]},
  users:{path:'/tenant/users',fields:[{key:'fullName',column:'full_name',label:'Nome'}],status:{path:'status',values:['active','inactive'],column:'status'}},
  tenants:{path:'/platform/tenants',fields:[{key:'name',column:'name',label:'Nome'},{key:'legalName',column:'legal_name',label:'Razão social'},{key:'cnpj',column:'cnpj',label:'CNPJ'},{key:'contactEmail',column:'contact_email',label:'E-mail'}],status:{path:'status',values:['active','suspended','closed'],column:'status'}},
@@ -313,16 +407,22 @@ export function TenantSettings({data,refresh}:{data:Row;refresh:()=>void}){const
 function LiveOperationMap() {
   const [data,setData]=useState<Row|null>(()=>latestDashboardData as Row|null);
   useEffect(()=>{const receive=(event:Event)=>setData((event as CustomEvent<Row>).detail);window.addEventListener('entregaja:dashboard-data',receive);return()=>window.removeEventListener('entregaja:dashboard-data',receive)},[]);
+  useEffect(()=>{const stream=new EventSource('/v1/tenant/live-locations/stream');const receive=(event:MessageEvent)=>{try{const liveCouriers=JSON.parse(event.data) as Row[];setData(previous=>({... (previous ?? {}),liveCouriers}))}catch{}};stream.addEventListener('locations',receive);return()=>{stream.removeEventListener('locations',receive);stream.close()}},[]);
   const couriers=Array.isArray(data?.liveCouriers)?data.liveCouriers as Row[]:[];
-  const points=couriers.map(c=>({courier:c,lat:Number(c.latitude),lon:Number(c.longitude)})).filter(point=>Number.isFinite(point.lat)&&Number.isFinite(point.lon));
-  const minLat=Math.min(...points.map(point=>point.lat),-3.78),maxLat=Math.max(...points.map(point=>point.lat),-3.72),minLon=Math.min(...points.map(point=>point.lon),-38.56),maxLon=Math.max(...points.map(point=>point.lon),-38.50);
-  const box=`${minLon-.01},${minLat-.01},${maxLon+.01},${maxLat+.01}`;
-  const left=(lon:number)=>`${((lon-minLon)/(maxLon-minLon||1))*100}%`;
-  const top=(lat:number)=>`${100-((lat-minLat)/(maxLat-minLat||1))*100}%`;
-  const unavailable=couriers.filter(c=>c.gps_status!=='ok');
-  const worker=(data as Row|undefined)?.worker as Row|undefined;
-  const workerLabels:Record<string,string>={active:'Worker ativo',stopped:'Worker parado',error:'Worker com erro',no_credential:'Firebase sem credencial',no_heartbeat:'Worker sem heartbeat'};
-  return <section className="live-operation"><div className="section-heading"><div><h2>Operação ao vivo</h2><p>{couriers.length?`${couriers.length} entregador(es) em rota`:'Nenhum entregador em rota agora'}</p></div><span className={`live-indicator ${worker?.status==='active'?'':'status-overdue'}`}>{workerLabels[String(worker?.status??'no_heartbeat')]}{worker?.pending?` · ${String(worker.pending)} na fila`:''}</span></div>{worker?.status==='error'&&<div className="alert" role="alert">O worker de notificações reportou erro: {String(worker.lastError)}</div>}{worker?.status==='no_credential'&&<div className="notice" role="status">As notificações push estão desativadas: configure o Firebase. O acompanhamento e o aviso local continuam disponíveis.</div>}{unavailable.length>0&&<div className="alert" role="alert">{unavailable.length===1?'Há uma rota ativa sem sinal ou com GPS atrasado.':`Há ${unavailable.length} rotas ativas sem sinal ou com GPS atrasado.`}</div>}<div className="live-map" role="img" aria-label="Mapa dos entregadores em rota"><iframe title="Mapa dos entregadores em rota" src={`https://www.openstreetmap.org/export/embed.html?bbox=${box.replaceAll(',','%2C')}&layer=mapnik`} loading="lazy" referrerPolicy="no-referrer"/>{points.map(point=><span key={String(point.courier.route_id)} className="live-courier-marker" style={{left:left(point.lon),top:top(point.lat)}} title={String(point.courier.full_name)} aria-label={String(point.courier.full_name)}/>)}</div><div className="live-courier-list">{couriers.map(c=><div key={String(c.route_id)}><b>{String(c.full_name)}</b><span className={c.gps_status==='ok'?'':'status-overdue'}>{c.gps_status==='ok'?'Posição recebida':c.gps_status==='stale'?'GPS atrasado':'Sem sinal GPS'}</span></div>)}</div></section>;
+  const worker = data?.worker as Row | undefined;
+  const noticeLabels: Record<string,string> = {
+    active: 'Envio de avisos ativo', stopped: 'O envio de avisos pode estar atrasado',
+    error: 'Houve uma falha ao enviar avisos', no_credential: 'Avisos no celular desativados',
+    no_heartbeat: 'Aguardando confirmação do serviço de avisos',
+  };
+  const pending = Number(worker?.pending ?? 0);
+  return <section className="live-operation">
+    <h2>Operação ao vivo</h2>
+    <p>{couriers.length === 1 ? '1 entregador compartilhando a localização' :
+      couriers.length ? `${couriers.length} entregadores compartilhando a localização` : 'Nenhum entregador compartilhando a localização agora'}</p>
+    <CourierMap couriers={couriers}/>
+    {worker && <p>{noticeLabels[String(worker.status)]}{pending > 0 && ` · ${pending} ${pending === 1 ? 'aviso aguardando envio' : 'avisos aguardando envio'}`}</p>}
+  </section>;
 }
 
 function Heatmap() { const [points,setPoints]=useState<Row[]>([]); const [error,setError]=useState(''); useEffect(()=>{api<Row[]>('/tenant/reports/heatmap').then(setPoints).catch(()=>setError('Não foi possível carregar o mapa de concentração.'))},[]); const valid=points.map(point=>({lat:Number(point.latitude),lon:Number(point.longitude),weight:Number(point.weight??1)})).filter(point=>Number.isFinite(point.lat)&&Number.isFinite(point.lon)); const minLat=Math.min(...valid.map(point=>point.lat),-3.78),maxLat=Math.max(...valid.map(point=>point.lat),-3.72),minLon=Math.min(...valid.map(point=>point.lon),-38.56),maxLon=Math.max(...valid.map(point=>point.lon),-38.50); const left=(lon:number)=>`${((lon-minLon)/(maxLon-minLon||1))*100}%`; const top=(lat:number)=>`${100-((lat-minLat)/(maxLat-minLat||1))*100}%`; return <section className="heatmap-card"><div className="section-heading"><div><h2>Concentração de entregas</h2><p>Entregas concluídas por localização</p></div><span className="live-indicator">Até 1.000 pontos</span></div>{error&&<div className="alert">{error}</div>}{valid.length?<div className="heatmap-map" role="img" aria-label="Mapa de concentração das entregas concluídas"><iframe title="Mapa base da concentração de entregas" src={`https://www.openstreetmap.org/export/embed.html?bbox=${minLon}%2C${minLat}%2C${maxLon}%2C${maxLat}&layer=mapnik`} loading="lazy" referrerPolicy="no-referrer"/>{valid.map((point,index)=><span key={`${point.lat}-${point.lon}-${index}`} className="heatmap-point" style={{left:left(point.lon),top:top(point.lat),opacity:Math.min(.9,.25+point.weight/10),transform:`translate(-50%,-50%) scale(${Math.min(2.5,1+point.weight/5)})`}} title={`${point.weight} entregas`}/>)}</div>:<p className="empty-hint">Ainda não há coordenadas suficientes para montar o mapa.</p>}</section>; }
@@ -372,3 +472,4 @@ export function GamificationSettings({data,refresh}:{data:Row;refresh:()=>void})
       <h3>Motivos de problema</h3><div className="config-list">{reasons.map(reason=><div key={String(reason.id)}><b>{String(reason.label)}</b><span>{reason.active===false?'Inativo':'Ativo'}</span><button type="button" className="secondary" onClick={()=>toggleReason(reason)}>{reason.active===false?'Ativar':'Desativar'}</button></div>)}</div>
     </section>
   </section>}
+import { AddressLookup, StreetField } from './AddressLookup';

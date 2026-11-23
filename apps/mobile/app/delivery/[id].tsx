@@ -17,7 +17,7 @@ import { styles as sharedStyles } from '../index';
 import { configuredBaseUrl, request, type DeliveryAddress, type DeliveryPhoto } from '../../src/api';
 import { deliveryStatusLabel } from '../../src/status';
 import { mapCoordinates, previewTiles } from '../../src/map-tiles';
-import { Icon } from '../../src/design-system';
+import { ConfirmModal, Icon } from '../../src/design-system';
 import { canComplete } from '../../src/delivery-detail-flow';
 import { distanceMeters } from '../../src/geo';
 
@@ -90,6 +90,7 @@ export default function Detail() {
   const [problemOpen, setProblemOpen] = useState(false);
   const [problemReason, setProblemReason] = useState('');
   const [problemPhotoUri, setProblemPhotoUri] = useState<string | null>(null);
+  const [confirmation, setConfirmation] = useState<'check_in'|'completion'|null>(null);
   const [problemReasons, setProblemReasons] = useState<Array<{ code: string; label: string }>>([
     { code: 'customer_absent', label: 'Cliente ausente' },
     { code: 'address_not_found', label: 'Endereço não encontrado' },
@@ -317,7 +318,7 @@ export default function Detail() {
               <Text style={detailStyles.mapPlaceholderLink}>Abrir busca do endereço no mapa</Text>
             </Pressable>}
           <View style={detailStyles.inlineActions}>
-            {active && <Pressable style={detailStyles.smallButton} onPress={() => { if (checkInPoint) Alert.alert('Refazer check-in?', 'O novo ponto substituirá o ponto salvo neste endereço.', [{ text: 'Cancelar', style: 'cancel' }, { text: 'Continuar', onPress: () => void queue('check_in') }]); else void queue('check_in'); }} disabled={busy} accessibilityRole="button"><Text style={detailStyles.secondaryButtonText}>{checkInPoint ? 'Refazer check-in' : 'Fazer check-in aqui'}</Text></Pressable>}
+            {active && <Pressable style={detailStyles.smallButton} onPress={() => { if (checkInPoint) setConfirmation('check_in'); else void queue('check_in'); }} disabled={busy} accessibilityRole="button"><Text style={detailStyles.secondaryButtonText}>{checkInPoint ? 'Refazer check-in' : 'Fazer check-in aqui'}</Text></Pressable>}
             <Pressable style={detailStyles.smallButton} onPress={openMap} accessibilityRole="button"><Text style={detailStyles.secondaryButtonText}>Abrir no app de mapas</Text></Pressable>
             {item.customer_phone && <Pressable style={detailStyles.smallButton} onPress={() => Linking.openURL(`tel:${item.customer_phone}`)} accessibilityRole="button"><Text style={detailStyles.secondaryButtonText}>Ligar</Text></Pressable>}
           </View>
@@ -384,7 +385,7 @@ export default function Detail() {
         {!active && <Text style={detailStyles.closedHint}>Esta entrega não permite novas operações.</Text>}
       </ScrollView>
       </SafeAreaView>
-      {active && <View style={detailStyles.footer}><Text style={detailStyles.footerHint}>{!hasRequiredCompletionData ? 'Para concluir: faça o check-in e envie 1 foto.' : ''}</Text><Pressable style={[sharedStyles.primaryButton, !hasRequiredCompletionData && detailStyles.disabledButton]} accessibilityRole="button" accessibilityState={{ disabled: !hasRequiredCompletionData }} disabled={!hasRequiredCompletionData || busy} onPress={() => Alert.alert('Concluir entrega?', 'Depois da confirmação, a entrega será finalizada.', [{ text: 'Cancelar', style: 'cancel' }, { text: 'Concluir', onPress: () => void queue('completion') }])}><Text style={sharedStyles.primaryButtonText}>Concluir entrega</Text></Pressable></View>}
+      {active && <View style={detailStyles.footer}><Text style={detailStyles.footerHint}>{!hasRequiredCompletionData ? 'Para concluir: faça o check-in e envie 1 foto.' : ''}</Text><Pressable style={[sharedStyles.primaryButton, !hasRequiredCompletionData && detailStyles.disabledButton]} accessibilityRole="button" accessibilityState={{ disabled: !hasRequiredCompletionData }} disabled={!hasRequiredCompletionData || busy} onPress={() => setConfirmation('completion')}><Text style={sharedStyles.primaryButtonText}>Concluir entrega</Text></Pressable></View>}
       {!!toast && <View style={detailStyles.toast}><Text style={detailStyles.toastText}>{toast}</Text></View>}
 
       <Modal visible={problemOpen} transparent animationType="slide" onRequestClose={() => setProblemOpen(false)}>
@@ -412,6 +413,7 @@ export default function Detail() {
         </View>
         </SafeAreaView>
       </Modal>
+      <ConfirmModal visible={confirmation !== null} title={confirmation === 'completion' ? 'Concluir entrega?' : 'Refazer check-in?'} message={confirmation === 'completion' ? 'Depois da confirmação, a entrega será finalizada.' : 'O novo ponto substituirá o ponto salvo neste endereço.'} confirmLabel={confirmation === 'completion' ? 'Concluir' : 'Continuar'} destructive={confirmation === 'completion'} onCancel={() => setConfirmation(null)} onConfirm={() => { const action = confirmation; setConfirmation(null); if (action) void queue(action); }}/>
     </>
   );
 }

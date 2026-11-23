@@ -21,8 +21,9 @@ import { Logo, brand } from '../src/brand';
 import { deliveryStatusLabel } from '../src/status';
 import { accountKey } from '../src/account-key';
 import { cancelRouteTracking, resumeRouteTracking, startRouteTracking } from '../src/route-tracking';
+import { resumeLiveLocation, startLiveLocation, stopLiveLocation } from '../src/live-location';
 import { toggleRouteSelection } from '../src/route-selection';
-import { EmptyState, Icon, ProgressRing, StatusChip } from '../src/design-system';
+import { ConfirmModal, EmptyState, Icon, ProgressRing, StatusChip } from '../src/design-system';
 
 type MainTab = 'ritmo' | 'deliveries' | 'profile' | 'settings';
 type DeliveryTab = 'open' | 'finished' | 'available';
@@ -227,7 +228,7 @@ function UnifiedSeasonalRank({ couriers, myId }: { couriers: SeasonalCourier[]; 
   const myCount = period === 'week' ? me?.weekCompleted ?? 0 : me?.monthCompleted ?? 0;
   const leaderCount = period === 'week' ? leader?.weekCompleted ?? 0 : leader?.monthCompleted ?? 0;
   const encouragement = position && position > 1 ? `Faltam ${Math.max(1, leaderCount - myCount)} entregas para alcançar o 1º lugar.` : position === 1 ? 'Você está em 1º lugar. Continue assim!' : 'Conclua uma entrega para entrar no ranking.';
-  return <View style={styles.teamRankCard}><View style={styles.teamRankHeading}><View><Text style={styles.sectionTitle}>Ranking</Text><Text style={styles.meta}>{period === 'week' ? 'Esta semana' : 'Este mês'} · entregas concluídas</Text></View><View style={styles.periodSwitch}>{(['week','month'] as const).map(option => <Pressable key={option} onPress={() => setPeriod(option)} style={[styles.periodButton,period===option&&styles.periodButtonActive]}><Text style={[styles.periodText,period===option&&styles.periodTextActive]}>{option==='week'?'Semana':'Mês'}</Text></Pressable>)}</View></View>{ordered.slice(0,3).map((courier,index) => <View key={courier.membershipId} style={[styles.teamRankRow,courier.membershipId===myId&&styles.teamRankRowMe]}><View style={styles.teamRankPosition}>{index < 3 ? <Text style={styles.teamRankPositionText}>{index+1}</Text> : null}</View><RankAvatar uri={courier.photoUri} name={courier.name}/><View style={styles.teamRankInfo}><Text style={styles.teamRankName}>{courier.name}{courier.membershipId===myId?' · você':''}</Text><Text style={styles.teamRankDeliveries}>{period==='week'?courier.weekCompleted:courier.monthCompleted} entregas</Text></View></View>)}<Text style={styles.rankEncouragement}>{encouragement}</Text></View>;
+  return <View style={styles.teamRankCard}><View><View><Text style={styles.sectionTitle}>Ranking</Text><Text style={styles.meta}>{period === 'week' ? 'Esta semana' : 'Este mês'} · entregas concluídas</Text></View><View style={styles.periodSwitch}>{(['week','month'] as const).map(option => <Pressable key={option} onPress={() => setPeriod(option)} style={[styles.periodButton,period===option&&styles.periodButtonActive]}><Text style={[styles.periodText,period===option&&styles.periodTextActive]}>{option==='week'?'Semana':'Mês'}</Text></Pressable>)}</View></View>{ordered.slice(0,3).map(courier => <View key={courier.membershipId} style={[styles.teamRankRow,courier.membershipId===myId&&styles.teamRankRowMe]}><View style={styles.teamRankPosition}><Text style={styles.teamRankPositionText}>{(period === 'week' ? courier.weekRank : courier.monthRank) ?? '—'}</Text></View><RankAvatar uri={courier.photoUri} name={courier.name}/><View style={styles.teamRankInfo}><Text style={styles.teamRankName}>{courier.name}{courier.membershipId===myId?' · você':''}</Text><Text style={styles.teamRankDeliveries}>{period==='week'?courier.weekCompleted:courier.monthCompleted} entregas</Text></View></View>)}<Text style={styles.rankEncouragement}>{encouragement}</Text></View>;
 }
 
 function RankAvatar({uri,name}:{uri?:string|null;name:string}) {
@@ -304,6 +305,10 @@ export default function Home() {
   const [pushReason,setPushReason]=useState('');
   const [developerMode, setDeveloperMode] = useState(false);
   const [activeRouteId, setActiveRouteId] = useState<string | null>(null);
+  const [liveLocationEnabled, setLiveLocationEnabled] = useState(false);
+  const [locationBusy, setLocationBusy] = useState(false);
+  const [locationConfirm, setLocationConfirm] = useState<'enable'|'disable'|null>(null);
+  const [locationConsentVersion, setLocationConsentVersion] = useState<string | null>(null);
   const versionTaps = useRef(0);
   const versionTapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -316,6 +321,7 @@ export default function Home() {
       setReady(true);
     });
     SecureStore.getItemAsync('activeRouteId').then(setActiveRouteId).catch(() => {});
+    SecureStore.getItemAsync('liveLocationEnabled').then(value => { setLiveLocationEnabled(value === 'true'); if (value === 'true') void resumeLiveLocation().catch(() => {}); }).catch(() => {});
   }, []);
 
   useFocusEffect(useCallback(() => {
@@ -447,20 +453,36 @@ export default function Home() {
   },[authed]);
 
   const progress = productivity ?? localProductivity(items, period);
-  useEffect(()=>{if(authed&&activeTab==='deliveries'&&deliveryTab==='available')request<{items:Delivery[]}>('/mobile/available').then(result=>setAvailableDeliveries(result.items)).catch(()=>Alert.alert('Entregas disponíveis','Não foi possível carregar as entregas disponíveis.'));},[authed,activeTab,deliveryTab]);
-  const visibleDeliveries = useMemo(() => items.filter(item => {
-    if (deliveryTab === 'open') {
-      if (item.status === 'completed' || item.status === 'cancelled') return false;
-      if (item.scheduled_for) return dayKey(item.scheduled_for) <= deliveryDate;
-      return !!item.created_at && dayKey(item.created_at) <= deliveryDate;
+  useEffect(() => {
+    if (!authed || activeTab !== 'deliveries') return;
+    let current = true;
+    request<{items:Delivery[]}>('/mobile/available').then(result => {
+      if (current) setAvailableDeliveries(result.items);
+    }).catch(() => {
+      if (current && deliveryTab === 'available') Alert.alert('Entregas disponíveis','Não foi possível carregar as entregas disponíveis.');
+    });
+    return () => { current = false; };
+  }, [authed, activeTab, deliveryTab]);
+  const byDay = useMemo(() => {
+    const open: Delivery[] = [], finished: Delivery[] = [];
+    for (const item of items) {
+      if (item.status === 'completed' || item.status === 'cancelled') {
+        const end = item.completed_at ?? item.cancelled_at ?? item.updated_at;
+        if (end && dayKey(end) === deliveryDate) finished.push(item);
+      } else {
+        const start = item.scheduled_for ?? item.created_at;
+        if (start && dayKey(start) <= deliveryDate) open.push(item);
+      }
     }
-    if (item.status !== 'completed' && item.status !== 'cancelled') return false;
-    const terminalAt = item.completed_at ?? item.cancelled_at ?? item.updated_at;
-    return !!terminalAt && dayKey(terminalAt) === deliveryDate;
-  }), [items, deliveryTab, deliveryDate]);
+    return { open, finished };
+  }, [items, deliveryDate]);
+  const visibleDeliveries = deliveryTab === 'available' ? availableDeliveries : byDay[deliveryTab];
+  const routeCandidates = useMemo(() => byDay.open.filter(item =>
+    item.status === 'assigned' || item.status === 'in_progress'), [byDay]);
   const deliveryRows=useMemo<DeliveryRow[]>(()=>{
     const source=deliveryTab==='available'?availableDeliveries:visibleDeliveries;
     if(deliveryTab==='available')return source;
+    if(deliveryTab==='open' && routeSelectionMode)return routeCandidates;
     const groups=new Map<string,Delivery[]>();
     for(const delivery of source){
       const address=delivery.destination_snapshot??{};
@@ -468,7 +490,7 @@ export default function Home() {
       const current=groups.get(key)??[]; current.push(delivery); groups.set(key,current);
     }
     return [...groups.values()].map(group=>group.length>1?{...group[0]!,groupedDeliveries:group}:group[0]!);
-  },[availableDeliveries,deliveryTab,visibleDeliveries]);
+  },[availableDeliveries,deliveryTab,visibleDeliveries,routeSelectionMode,routeCandidates]);
   function toggleDeliveryGroup(id:string){setExpandedDeliveryGroups(groups=>groups.includes(id)?groups.filter(value=>value!==id):[...groups,id]);}
   function callCustomer(item:Delivery){if(!item.customer_phone){Alert.alert('Telefone indisponível','Este cliente não possui telefone cadastrado.');return;}Linking.openURL(`tel:${item.customer_phone}`).catch(()=>Alert.alert('Telefone','Não foi possível abrir o telefone neste aparelho.'));}
   function openDeliveryMap(item:Delivery){const address=item.destination_snapshot??{};const query=[address.street,address.number,address.neighborhood,address.city,address.state,address.postal_code].filter(Boolean).join(', ');const coordinates=address.reference_latitude!=null&&address.reference_longitude!=null?`${address.reference_latitude},${address.reference_longitude}`:query;Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(coordinates)}`).catch(()=>Alert.alert('Mapa','Não foi possível abrir o aplicativo de mapas.'));}
@@ -510,7 +532,40 @@ export default function Home() {
     } catch (error) { Alert.alert('Configuração', userFacingError(error,'Não foi possível salvar esta configuração.')); }
   }
 
+  async function toggleLiveLocation(enabled: boolean) {
+    setLocationBusy(true);
+    try {
+      if (enabled) {
+        const consent = await request<{ accepted: boolean; policyVersion: string }>('/mobile/location-consent');
+        if (!consent.accepted) {
+          setLocationConfirm(null);
+          setLocationConsentVersion(consent.policyVersion);
+          return;
+        }
+        await startLiveLocation();
+        setLiveLocationEnabled(true);
+      }
+      else { await stopLiveLocation(); setLiveLocationEnabled(false); }
+      setLocationConfirm(null);
+    } catch (error) { Alert.alert('Localização', userFacingError(error, 'Não foi possível atualizar o compartilhamento.')); }
+    finally { setLocationBusy(false); }
+  }
+
+  async function acceptLocationConsent() {
+    if (!locationConsentVersion) return;
+    setLocationBusy(true);
+    try {
+      await request('/mobile/location-consent', { method: 'POST', body: JSON.stringify({ policyVersion: locationConsentVersion }) });
+      await startLiveLocation();
+      setLiveLocationEnabled(true);
+      setLocationConsentVersion(null);
+    } catch (error) {
+      Alert.alert('Localização', userFacingError(error, 'Não foi possível aceitar a política e ativar o compartilhamento.'));
+    } finally { setLocationBusy(false); }
+  }
+
   async function leave() {
+    await stopLiveLocation().catch(() => {});
     await unregisterDevice();
     await signOut();
     reset();
@@ -568,8 +623,10 @@ export default function Home() {
         <Text style={styles.title}>Área do entregador</Text>
         <TextInput style={styles.input} placeholder="E-mail" autoCapitalize="none" keyboardType="email-address" value={email} onChangeText={setEmail}/>
         <TextInput style={styles.input} placeholder="Senha" secureTextEntry value={password} onChangeText={setPassword}/>
+        <Text style={styles.fieldLabel}>Servidor da API</Text>
+        <TextInput style={styles.input} placeholder="http://100.119.253.37:3000" value={serverUrl} autoCapitalize="none" autoCorrect={false} keyboardType="url" onChangeText={setServerUrl}/>
+        <Text style={styles.loginHint}>Para testes remotos, use o IP Tailscale da máquina que executa a API.</Text>
         <Pressable onPress={tapVersion} accessibilityRole="button"><Text style={styles.loginVersion}>Entrega Já {Constants.expoConfig?.version ?? 'Android'}</Text></Pressable>
-        {developerMode && <><Text style={styles.fieldLabel}>URL da API (modo desenvolvedor)</Text><TextInput style={styles.input} placeholder="URL da API" value={serverUrl} autoCapitalize="none" keyboardType="url" onChangeText={setServerUrl}/></>}
         <Pressable style={styles.primaryButton} onPress={enter} disabled={busy}><Text style={styles.primaryButtonText}>{busy ? 'Entrando…' : 'Entrar'}</Text></Pressable>
       </View>
     </SafeAreaView>
@@ -624,7 +681,7 @@ export default function Home() {
             keyExtractor={item => item.id}
             contentContainerStyle={deliveryRows.length ? styles.list : styles.listEmpty}
             ListHeaderComponent={<View style={styles.deliveryHeader}>
-              {deliveryTab==='open'&&<>{activeRouteId&&<Pressable style={[styles.secondarySync,{marginTop:10}]} onPress={cancelCurrentRoute} accessibilityRole="button"><Text style={styles.secondarySyncText}>Cancelar rota ativa</Text></Pressable>}<Pressable style={[styles.secondarySync,{marginTop:10},routeSelectionMode&&styles.routeSelectionToggleActive]} onPress={()=>{setRouteSelectionMode(mode=>{if(mode)setRouteSelection([]);return !mode;})}} accessibilityRole="button" accessibilityState={{selected:routeSelectionMode}}><Text style={[styles.secondarySyncText,routeSelectionMode&&styles.routeSelectionToggleTextActive]}>{routeSelectionMode?'Cancelar montagem da rota':'Montar rota'}</Text></Pressable>{routeSelectionMode&&<View style={styles.routeSelectionHint}><Text style={styles.routeSelectionHintText}>{routeSelection.length?`Toque nas entregas na ordem da rota · ${routeSelection.length} selecionada(s)`:'Toque nas entregas na ordem em que devem ser feitas.'}</Text></View>}{routeSelection.length>0&&<Pressable style={styles.syncButton} onPress={createAndStartRoute}><Text style={styles.primaryButtonText}>Iniciar rota · {routeSelection.length} parada(s)</Text></Pressable>}</>}
+              {deliveryTab==='open'&&<>{activeRouteId&&<Pressable style={[styles.secondarySync,{marginTop:10}]} onPress={cancelCurrentRoute} accessibilityRole="button"><Text style={styles.secondarySyncText}>Cancelar rota ativa</Text></Pressable>}{!activeRouteId && routeCandidates.length > 0 && <Pressable style={[styles.secondarySync,{marginTop:10},routeSelectionMode&&styles.routeSelectionToggleActive]} onPress={()=>{setRouteSelectionMode(mode=>{if(mode)setRouteSelection([]);return !mode;})}} accessibilityRole="button" accessibilityState={{selected:routeSelectionMode}}><Text style={[styles.secondarySyncText,routeSelectionMode&&styles.routeSelectionToggleTextActive]}>{routeSelectionMode?'Cancelar montagem da rota':'Montar rota'}</Text></Pressable>}{routeSelectionMode&&<View style={styles.routeSelectionHint}><Text style={styles.routeSelectionHintText}>{routeSelection.length?`Toque nas entregas na ordem da rota · ${routeSelection.length} selecionada(s)`:'Toque nas entregas na ordem em que devem ser feitas.'}</Text></View>}{routeSelection.length>0&&<Pressable style={styles.syncButton} onPress={createAndStartRoute}><Text style={styles.primaryButtonText}>Iniciar rota · {routeSelection.length} parada(s)</Text></Pressable>}</>}
               {operations().length > 0 && <Text style={styles.pendingText}>{operations().length} operação(ões) aguardando envio</Text>}
               {failedOperations().length > 0 && <Pressable style={styles.errorCard} onPress={() => {
                 const failed = failedOperations();
@@ -638,7 +695,7 @@ export default function Home() {
               <View style={styles.deliveryTabs}>
                 {(['open', 'finished','available'] as const).map(tab => <Pressable key={tab} onPress={() => setDeliveryTab(tab)} style={[styles.deliveryTab, deliveryTab === tab && styles.deliveryTabActive]} accessibilityRole="tab" accessibilityState={{ selected: deliveryTab === tab }}>
                   <Text style={[styles.deliveryTabText, deliveryTab === tab && styles.deliveryTabTextActive]}>{tab === 'open' ? 'Em aberto' : tab==='finished'?'Finalizadas':'Disponíveis'}</Text>
-                  <Text style={[styles.deliveryTabCount, deliveryTab === tab && styles.deliveryTabTextActive]}>{tab==='available'?availableDeliveries.length:visibleDeliveries.length}</Text>
+                  <Text style={[styles.deliveryTabCount, deliveryTab === tab && styles.deliveryTabTextActive]}>{tab==='available'?availableDeliveries.length:byDay[tab].length}</Text>
                 </Pressable>)}
               </View>
               {deliveryTab!=='available'&&<><Pressable style={styles.datePickerButton} onPress={() => { setCalendarMonth(deliveryDate.slice(0, 7)); setCalendarOpen(true); }} accessibilityRole="button" accessibilityLabel={`Filtrar entregas por dia: ${dateLabel(deliveryDate)}`}>
@@ -656,7 +713,7 @@ export default function Home() {
               <Text style={styles.deliveryCount}>{deliveryTab==='available'?deliveryRows.length:visibleDeliveries.length} {(deliveryTab==='available'?deliveryRows.length:visibleDeliveries.length) === 1 ? 'entrega' : 'entregas'}{deliveryTab!=='available'&&deliveryRows.length<visibleDeliveries.length?` · ${deliveryRows.length} endereços`:''}</Text>
             </View>}
             ListEmptyComponent={<EmptyState icon={deliveryTab === 'open' ? 'check' : 'clock'} title={deliveryTab === 'available'?'Nenhuma entrega disponível':deliveryTab === 'open' ? 'Tudo em dia por aqui' : 'Nenhuma entrega finalizada neste dia'} message="Tente sincronizar novamente mais tarde."/>}
-            renderItem={({ item }) => {const grouped=item.groupedDeliveries??[item];const expanded=expandedDeliveryGroups.includes(item.id);const routeOrder=routeSelection.indexOf(item.id);return <Pressable style={[styles.deliveryCard,routeOrder>=0&&styles.routeSelectedCard]} onPress={() => deliveryTab==='available'?undefined:routeSelectionMode?setRouteSelection(ids=>toggleRouteSelection(ids,item.id)):router.push({ pathname: '/delivery/[id]', params: { id: item.id } })} onLongPress={()=>{if(deliveryTab==='open'){setRouteSelectionMode(true);setRouteSelection(ids=>ids.includes(item.id)?ids:toggleRouteSelection(ids,item.id));}}} accessibilityRole="button" accessibilityState={{selected:routeOrder>=0}} accessibilityHint={routeSelectionMode?'Toque para incluir ou remover esta entrega da rota. A ordem dos toques define as paradas.':'Toque para abrir. Mantenha pressionado para começar a montar uma rota.'} accessibilityLabel={`${item.customer_name}, ${item.merchandise_description}, ${deliveryTab==='available'?'Disponível':deliveryStatusLabel(item.status)}${routeOrder>=0?`, parada ${routeOrder+1} selecionada`:''}`}>
+            renderItem={({ item }) => {const grouped=item.groupedDeliveries??[item];const expanded=expandedDeliveryGroups.includes(item.id);const routeOrder=routeSelection.indexOf(item.id);return <Pressable style={[styles.deliveryCard,routeOrder>=0&&styles.routeSelectedCard]} onPress={() => deliveryTab==='available'?undefined:routeSelectionMode?setRouteSelection(ids=>toggleRouteSelection(ids,item.id)):router.push({ pathname: '/delivery/[id]', params: { id: item.id } })} onLongPress={()=>{if(deliveryTab==='open' && !activeRouteId && routeCandidates.some(candidate => candidate.id===item.id)){setRouteSelectionMode(true);setRouteSelection(ids=>ids.includes(item.id)?ids:toggleRouteSelection(ids,item.id));}}} accessibilityRole="button" accessibilityState={{selected:routeOrder>=0}} accessibilityHint={routeSelectionMode?'Toque para incluir ou remover esta entrega da rota. A ordem dos toques define as paradas.':'Toque para abrir. Mantenha pressionado para começar a montar uma rota.'} accessibilityLabel={`${item.customer_name}, ${item.merchandise_description}, ${deliveryTab==='available'?'Disponível':deliveryStatusLabel(item.status)}${routeOrder>=0?`, parada ${routeOrder+1} selecionada`:''}`}>
               <View style={styles.cardHeading}><View style={styles.cardTitleGroup}>{routeOrder>=0&&<View style={styles.routeOrderBadge}><Text style={styles.routeOrderBadgeText}>{routeOrder+1}</Text></View>}<Text style={styles.name}>{item.customer_name}</Text></View><View style={styles.cardStatusGroup}><StatusChip status={deliveryTab==='available'?'assigned':isOverdue(item)?'overdue':item.status as 'assigned'|'in_progress'|'completed'|'problem'|'pending'} label={deliveryTab==='available'?'Disponível':isOverdue(item)?'Atrasada':deliveryStatusLabel(item.status)}/></View></View>
               {grouped.length>1&&<Pressable onPress={()=>toggleDeliveryGroup(item.id)} accessibilityRole="button" accessibilityLabel={expanded?"Ocultar entregas deste endereço":"Expandir entregas deste endereço"}><Text style={styles.groupSummary}>{expanded?"Ocultar detalhes":`${grouped.length} entregas neste endereço`}</Text></Pressable>}{expanded&&<View style={styles.groupedDeliveryList}>{grouped.slice(1).map(delivery=><Text key={delivery.id} style={styles.groupedDeliveryText}>{delivery.merchandise_description}</Text>)}</View>}{item.items?.length?<View style={{flexDirection:'row',flexWrap:'wrap',gap:7}}>{item.items.map(volume=><View key={volume.id} style={{flexDirection:'row',alignItems:'center',gap:5,backgroundColor:'#EEF4F5',borderRadius:10,paddingHorizontal:10,paddingVertical:7}}><VolumeIcon/><Text style={styles.meta}>{volume.quantity}× {volume.name}</Text></View>)}</View>:<Text style={styles.meta}>{item.merchandise_description}</Text>}
               {shortAddress(item).map((line, index) => <Text style={styles.addressLine} key={`${item.id}-${index}`}>{line}</Text>)}
@@ -698,7 +755,14 @@ export default function Home() {
           </ScrollView>}
 
           {activeTab === 'settings' && <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-            <View style={styles.settingsIntro}><View style={styles.settingsIcon}><Icon name="settings" color={brand.petroleum} size={23}/></View><View><Text style={styles.sectionTitle}>Ajustes do aplicativo</Text><Text style={styles.meta}>Conexão e funcionamento da sua conta.</Text></View></View>
+            <View style={styles.settingsIntro}><View style={styles.settingsIcon}><Icon name="settings" color={brand.petroleum} size={23}/></View><View style={{flex:1}}><Text style={styles.sectionTitle}>Ajustes do aplicativo</Text><Text style={styles.meta}>Conexão e funcionamento da sua conta.</Text></View></View>
+            <View style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>Localização em tempo real</Text>
+              <Text style={styles.meta}>Compartilhe sua posição com a gestão mesmo sem iniciar uma rota.</Text>
+              <Pressable style={[styles.locationToggle, liveLocationEnabled && styles.locationToggleOn]} onPress={() => setLocationConfirm(liveLocationEnabled ? 'disable' : 'enable')} disabled={locationBusy} accessibilityRole="switch" accessibilityState={{ checked: liveLocationEnabled, disabled: locationBusy }}>
+                <View style={{flex:1}}><Text style={styles.settingsRowLabel}>{liveLocationEnabled ? 'Compartilhamento ativo' : 'Compartilhamento desligado'}</Text><Text style={styles.settingsFootnote}>{liveLocationEnabled ? 'A posição é atualizada em segundo plano.' : 'Ative somente durante o período de trabalho.'}</Text></View><Text style={[styles.settingsState, liveLocationEnabled && styles.settingsStateOn]}>{locationBusy ? 'Atualizando…' : liveLocationEnabled ? 'Ativo' : 'Desligado'}</Text>
+              </Pressable>
+            </View>
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>Conexão com a API</Text><Text style={styles.meta}>Endereço do serviço usado para sincronizar sua rota.</Text>
               {developerMode ? <><Text style={styles.fieldLabel}>URL da API</Text><TextInput style={styles.input} value={serverUrl} autoCapitalize="none" keyboardType="url" onChangeText={setServerUrl}/><Pressable style={styles.primaryButton} onPress={saveServerUrl} disabled={busy}><Text style={styles.primaryButtonText}>{busy ? 'Salvando…' : 'Salvar e sincronizar'}</Text></Pressable></> : <Text style={styles.meta}>A conexão é gerenciada automaticamente.</Text>}
@@ -742,6 +806,8 @@ export default function Home() {
       </View>
       <CalendarDialog visible={calendarOpen} value={deliveryDate} month={calendarMonth} onMonth={setCalendarMonth}
         onSelect={date => { setDeliveryDate(date); setCalendarOpen(false); }} onClose={() => setCalendarOpen(false)}/>
+      <ConfirmModal visible={locationConfirm !== null} title={locationConfirm === 'enable' ? 'Ativar localização em tempo real?' : 'Desativar localização em tempo real?'} message={locationConfirm === 'enable' ? 'Sua posição será compartilhada com a gestão enquanto este recurso estiver ativo, inclusive em segundo plano.' : 'A gestão deixará de receber novas posições assim que o compartilhamento for desativado.'} confirmLabel={locationConfirm === 'enable' ? 'Ativar' : 'Desativar'} destructive={locationConfirm === 'disable'} onCancel={() => setLocationConfirm(null)} onConfirm={() => void toggleLiveLocation(locationConfirm === 'enable')}/>
+      <ConfirmModal visible={locationConsentVersion !== null} title="Consentimento de localização" message="Ao aceitar, o Entrega Já compartilhará sua localização com a gestão durante o trabalho, inclusive quando o aplicativo estiver em segundo plano. Você pode desativar esse compartilhamento a qualquer momento em Configurações." confirmLabel="Aceitar e ativar" onCancel={() => setLocationConsentVersion(null)} onConfirm={() => void acceptLocationConsent()}/>
     </SafeAreaView>
   );
 }
@@ -790,6 +856,9 @@ export const styles = StyleSheet.create({
   secondarySyncText: { fontFamily: 'Inter_600SemiBold', color: brand.petroleum, fontSize: 14 },
   link: { fontFamily: 'Inter_600SemiBold', color: brand.petroleum, paddingVertical: 8, paddingHorizontal: 4 },
   loginVersion: { fontFamily: 'Inter_400Regular', color: brand.muted, fontSize: 11, textAlign: 'center', padding: 8, minHeight: 48, textAlignVertical: 'center' },
+  loginHint: { fontFamily: 'Inter_400Regular', color: brand.muted, fontSize: 11, lineHeight: 16, marginTop: -8 },
+  locationToggle: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginTop: 14, padding: 13, borderRadius: 12, borderWidth: 1, borderColor: brand.border, backgroundColor: '#F8FBFB' },
+  locationToggleOn: { borderColor: brand.success, backgroundColor: '#F0FAF5' },
   meta: { fontFamily: 'Inter_400Regular', color: brand.muted, fontSize: 13, lineHeight: 19 },
   introCard: { minHeight: 90, flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: brand.petroleumDark, borderRadius: 17, padding: 16, overflow: 'hidden' },
   introMark: { width: 40, height: 40, borderRadius: 20, backgroundColor: brand.accent, alignItems: 'center', justifyContent: 'center' },
@@ -813,13 +882,13 @@ export const styles = StyleSheet.create({
   missionTargetRow: { flexDirection: 'row', alignItems: 'baseline', marginTop: 2 }, missionTarget: { fontFamily: 'Inter_600SemiBold', fontSize: 28, color: brand.petroleum }, missionTargetMuted: { fontFamily: 'Inter_500Medium', color: brand.muted, fontSize: 13 }, missionPercent: { marginLeft: 'auto', fontFamily: 'Inter_600SemiBold', color: brand.petroleum, fontSize: 13 },
   missionTrack: { height: 8, borderRadius: 5, backgroundColor: brand.petroleumLight, overflow: 'hidden' }, missionFill: { height: '100%', backgroundColor: brand.accent, borderRadius: 5 },
   statTiles: { flexDirection: 'row', gap: 9 }, statTile: { flex: 1, minHeight: 74, borderRadius: 14, backgroundColor: 'white', borderWidth: 1, borderColor: brand.border, padding: 12, justifyContent: 'center', gap: 3 }, statTileValue: { fontFamily: 'Inter_600SemiBold', color: brand.petroleum, fontSize: 22 }, statTileLabel: { fontFamily: 'Inter_400Regular', color: brand.muted, fontSize: 10 },
-  deliveryHeader: { paddingHorizontal: 18, paddingTop: 6, paddingBottom: 4 }, syncButton: { backgroundColor: brand.petroleum, paddingVertical: 14, borderRadius: 12, alignItems: 'center', justifyContent: 'center', minHeight: 48 },
+  deliveryHeader: { paddingTop: 6, paddingBottom: 4 }, syncButton: { backgroundColor: brand.petroleum, paddingVertical: 14, borderRadius: 12, alignItems: 'center', justifyContent: 'center', minHeight: 48 },
   deliveryTabs: { flexDirection: 'row', gap: 6, backgroundColor: '#E9EFF1', borderRadius: 12, padding: 4, marginTop: 14 },
-  deliveryTab: { flex: 1, borderRadius: 9, paddingVertical: 9, paddingHorizontal: 10, minHeight: 48, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 7 }, deliveryTabActive: { backgroundColor: brand.petroleum },
+  deliveryTab: { flex: 1, borderRadius: 9, paddingVertical: 9, paddingHorizontal: 2, minHeight: 48, flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: 2 }, deliveryTabActive: { backgroundColor: brand.petroleum },
   deliveryTabText: { fontFamily: 'Inter_600SemiBold', color: brand.muted, fontSize: 13 }, deliveryTabTextActive: { color: 'white' }, deliveryTabCount: { fontFamily: 'Inter_600SemiBold', color: brand.muted, fontSize: 10, opacity: 0.85 },
   datePickerButton: { flexDirection: 'row', alignItems: 'center', gap: 11, backgroundColor: 'white', borderWidth: 1, borderColor: brand.border, borderRadius: 13, padding: 12, marginTop: 12 },
   calendarGlyph: { width: 38, height: 38, borderRadius: 12, backgroundColor: brand.petroleumLight, alignItems: 'center', justifyContent: 'center' }, calendarGlyphText: { fontSize: 22, color: brand.petroleum },
-  datePickerInfo: { flex: 1, gap: 2 }, datePickerCaption: { fontFamily: 'Inter_600SemiBold', fontSize: 9, letterSpacing: 1, color: brand.muted }, datePickerValue: { fontFamily: 'Inter_600SemiBold', fontSize: 13, color: brand.text, textTransform: 'capitalize' }, datePickerChange: { fontFamily: 'Inter_600SemiBold', color: brand.petroleum, fontSize: 12 },
+  datePickerInfo: { flex: 1, gap: 2 }, datePickerCaption: { fontFamily: 'Inter_600SemiBold', fontSize: 9, letterSpacing: 1, color: brand.muted }, datePickerValue: { fontFamily: 'Inter_600SemiBold', fontSize: 13, color: brand.text }, datePickerChange: { fontFamily: 'Inter_600SemiBold', color: brand.petroleum, fontSize: 12 },
   dateStepper: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 3 }, dayStepButton: { paddingVertical: 8, paddingHorizontal: 3, minHeight: 48, justifyContent: 'center' }, dayStepText: { fontFamily: 'Inter_500Medium', color: brand.petroleum, fontSize: 11 }, todayButton: { minHeight: 48, paddingVertical: 6, paddingHorizontal: 13, borderRadius: 20, backgroundColor: '#E9EFF1', justifyContent: 'center' }, todayText: { fontFamily: 'Inter_600SemiBold', color: brand.petroleum, fontSize: 11 }, dateHint: { fontFamily: 'Inter_400Regular', color: brand.muted, fontSize: 11, marginTop: 1 }, deliveryCount: { fontFamily: 'Inter_600SemiBold', color: brand.text, fontSize: 13, marginTop: 12 },
   list: { paddingHorizontal: 18, paddingBottom: 18 }, listEmpty: { flexGrow: 1, paddingHorizontal: 18, paddingBottom: 20 }, deliveryCard: { backgroundColor: 'white', padding: 17, borderRadius: 15, marginTop: 10, gap: 8, borderWidth: 1, borderColor: '#EDF0F2' }, quickActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 3 }, quickAction: { minHeight: 48, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1, borderColor: brand.border, justifyContent: 'center', backgroundColor: '#F8FBFB' }, quickActionText: { fontFamily: 'Inter_600SemiBold', color: brand.petroleum, fontSize: 12 }, groupSummary: { fontFamily: 'Inter_600SemiBold', color: brand.petroleum, fontSize: 12, paddingVertical: 10 }, groupedDeliveryList: { gap: 4, padding: 9, backgroundColor: brand.petroleumLight, borderRadius: 10 }, groupedDeliveryText: { fontFamily: 'Inter_400Regular', color: brand.text, fontSize: 12 },
   cardHeading: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }, cardTitleGroup: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }, name: { flex: 1, fontFamily: 'Inter_600SemiBold', fontSize: 16, color: brand.text }, cardStatusGroup: { alignItems: 'flex-end', gap: 5 },

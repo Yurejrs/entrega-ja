@@ -26,9 +26,9 @@ cd "$root_dir"
 pnpm --filter @entregas/mobile build:android:release
 
 apk="$root_dir/apps/mobile/android/app/build/outputs/apk/release/app-release.apk"
-destination="$root_dir/releases/entrega-ja-android-v1.0.0-beta.1.apk"
+destination="$root_dir/releases/entrega-ja-android-v1.0.0-beta.1.1.apk"
 mkdir -p "$root_dir/releases"
-aapt dump badging "$apk" | grep -Fq "package: name='com.kynesis.entregaja' versionCode='23' versionName='1.0.0-beta.1'" \
+aapt dump badging "$apk" | grep -Fq "package: name='com.kynesis.entregaja' versionCode='24' versionName='1.0.0-beta.1.1'" \
   || { echo 'APK não corresponde ao pacote/versão esperados.' >&2; exit 1; }
 apksigner verify --verbose "$apk" | grep -Fq 'Verified using v2 scheme (APK Signature Scheme v2): true' \
   || { echo 'APK não passou na assinatura v2.' >&2; exit 1; }

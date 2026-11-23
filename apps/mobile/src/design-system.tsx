@@ -1,5 +1,5 @@
 import { ReactNode } from 'react';
-import { Pressable, StyleSheet, Text, View, ViewStyle } from 'react-native';
+import { Modal, Pressable, StyleSheet, Text, View, ViewStyle } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { brand } from './brand';
 
@@ -35,6 +35,9 @@ export function StatusChip({ status, label }: { status: 'assigned'|'in_progress'
 export function PrimaryButton({ children, onPress, disabled = false }: { children: ReactNode; onPress?: () => void; disabled?: boolean }) { return <Pressable onPress={onPress} disabled={disabled} style={[styles.primary, disabled && styles.disabled]} accessibilityRole="button"><Text style={styles.primaryText}>{children}</Text></Pressable>; }
 export function SecondaryButton({ children, onPress, disabled = false }: { children: ReactNode; onPress?: () => void; disabled?: boolean }) { return <Pressable onPress={onPress} disabled={disabled} style={[styles.secondary, disabled && styles.disabled]} accessibilityRole="button"><Text style={styles.secondaryText}>{children}</Text></Pressable>; }
 export function EmptyState({ icon = 'box', title, message }: { icon?: IconName; title: string; message: string }) { return <View style={styles.empty}><Icon name={icon} size={28} color={brand.petroleum}/><Text style={styles.emptyTitle}>{title}</Text><Text style={styles.emptyMessage}>{message}</Text></View>; }
+export function ConfirmModal({ visible, title, message, confirmLabel = 'Continuar', destructive = false, onCancel, onConfirm }: { visible: boolean; title: string; message: string; confirmLabel?: string; destructive?: boolean; onCancel: () => void; onConfirm: () => void }) {
+  return <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}><View style={styles.confirmBackdrop}><View style={styles.confirmCard}><Text style={styles.confirmTitle}>{title}</Text><Text style={styles.confirmMessage}>{message}</Text><View style={styles.confirmActions}><Pressable style={styles.confirmSecondary} onPress={onCancel}><Text style={styles.confirmSecondaryText}>Cancelar</Text></Pressable><Pressable style={[styles.confirmPrimary, destructive && styles.confirmDanger]} onPress={onConfirm}><Text style={styles.confirmPrimaryText}>{confirmLabel}</Text></Pressable></View></View></View></Modal>;
+}
 export function Skeleton({ width = '100%', height = 18 }: { width?: number | `${number}%`; height?: number }) { return <View style={[styles.skeleton, { width, height }]} />; }
 export function ProgressRing({ value, size = 76, stroke = 8 }: { value: number; size?: number; stroke?: number }) { const radius = (size - stroke) / 2; const circumference = 2 * Math.PI * radius; return <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}><Circle cx={size/2} cy={size/2} r={radius} stroke={brand.petroleumLight} strokeWidth={stroke} fill="none"/><Circle cx={size/2} cy={size/2} r={radius} stroke={brand.accent} strokeWidth={stroke} fill="none" strokeLinecap="round" strokeDasharray={`${circumference} ${circumference}`} strokeDashoffset={circumference * (1 - Math.min(100, Math.max(0, value)) / 100)} transform={`rotate(-90 ${size/2} ${size/2})`}/></Svg>; }
 
@@ -50,4 +53,14 @@ const styles = StyleSheet.create({
   chipText: { fontFamily: 'Inter_600SemiBold', fontSize: 11 }, chipText_info: { color: brand.petroleum }, chipText_success: { color: brand.success }, chipText_warning: { color: brand.warning }, chipText_danger: { color: brand.danger },
   empty: { backgroundColor: 'white', borderRadius: 16, borderWidth: 1, borderColor: brand.border, padding: 24, alignItems: 'center', gap: 8, marginTop: 20 }, emptyTitle: { fontFamily: 'Inter_600SemiBold', color: brand.text, fontSize: 15, textAlign: 'center' }, emptyMessage: { fontFamily: 'Inter_400Regular', color: brand.muted, fontSize: 12, lineHeight: 18, textAlign: 'center' },
   skeleton: { backgroundColor: '#E7EEF0', borderRadius: 8, marginVertical: 5 },
+  confirmBackdrop: { flex: 1, backgroundColor: '#072A3588', justifyContent: 'center', padding: 22 },
+  confirmCard: { backgroundColor: 'white', borderRadius: 20, padding: 20, gap: 12 },
+  confirmTitle: { fontFamily: 'Inter_600SemiBold', color: brand.text, fontSize: 18 },
+  confirmMessage: { fontFamily: 'Inter_400Regular', color: brand.muted, fontSize: 13, lineHeight: 19 },
+  confirmActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 6 },
+  confirmSecondary: { minHeight: 48, borderRadius: 11, paddingHorizontal: 15, justifyContent: 'center', backgroundColor: brand.petroleumLight },
+  confirmSecondaryText: { fontFamily: 'Inter_600SemiBold', color: brand.petroleum, fontSize: 13 },
+  confirmPrimary: { minHeight: 48, borderRadius: 11, paddingHorizontal: 15, justifyContent: 'center', backgroundColor: brand.petroleum },
+  confirmDanger: { backgroundColor: brand.danger },
+  confirmPrimaryText: { fontFamily: 'Inter_600SemiBold', color: 'white', fontSize: 13 },
 });

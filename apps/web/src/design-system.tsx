@@ -1,7 +1,14 @@
 import type { ReactNode, ButtonHTMLAttributes, InputHTMLAttributes, SelectHTMLAttributes } from 'react';
-import { AlertTriangle, Box, CheckCircle2, Clock3, PackageOpen, Search } from 'lucide-react';
+import { AlertTriangle, Box, CheckCircle2, Clock3, PackageOpen, Search, ShoppingBasket, Flame, Droplet, Utensils, Pill, FileText, Shapes, type LucideIcon } from 'lucide-react';
 
-export function VolumeIcon({ size = 17 }: { size?: number }) { return <Box size={size} strokeWidth={1.8} aria-hidden="true" />; }
+const volumeGlyphs: Record<string, LucideIcon> = {
+  market: ShoppingBasket, gas: Flame, water: Droplet, box: Box,
+  food: Utensils, medicine: Pill, document: FileText, other: Shapes,
+};
+export function VolumeIcon({ iconKey, size = 17 }: { iconKey?: unknown; size?: number }) {
+  const Glyph = volumeGlyphs[String(iconKey)] ?? Box;
+  return <Glyph size={size} strokeWidth={1.8} aria-hidden="true" />;
+}
 export function StatusChip({ status, children }: { status: string; children: ReactNode }) { return <span className={`status status-${status}`}><span className="status-dot" aria-hidden="true" />{children}</span>; }
 export function StatusBadge({ status, children }: { status: string; children: ReactNode }) { return <StatusChip status={status}>{children}</StatusChip>; }
 export function EmptyState({ title, message, icon = 'package', action }: { title: string; message: string; icon?: 'package'|'clock'|'alert'; action?: ReactNode }) { const Icon = icon === 'clock' ? Clock3 : icon === 'alert' ? AlertTriangle : PackageOpen; return <div className="empty-state"><Icon size={28} aria-hidden="true" /><strong>{title}</strong><span>{message}</span>{action}</div>; }

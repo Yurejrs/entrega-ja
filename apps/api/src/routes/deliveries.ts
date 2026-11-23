@@ -111,7 +111,9 @@ export function registerDeliveryRoutes(app: FastifyInstance, pools: DbPools, con
         c.name AS customer_name,c.phone AS customer_phone FROM app.deliveries d JOIN app.customers c ON c.id=d.customer_id AND c.tenant_id=d.tenant_id
         WHERE ($1::text IS NULL OR d.status=$1)
         AND ($2::uuid IS NULL OR d.customer_id=$2) AND ($3::uuid IS NULL OR d.address_id=$3)
-        AND ($4::uuid IS NULL OR d.courier_membership_id=$4) AND ($5::uuid IS NULL OR d.id<$5)
+        AND ($4::uuid IS NULL OR d.courier_membership_id=$4)
+        AND ($5::uuid IS NULL OR (d.created_at,d.id) < (
+          SELECT prior.created_at,prior.id FROM app.deliveries prior WHERE prior.id=$5))
         AND ($6::timestamptz IS NULL OR d.created_at>=$6) AND ($7::timestamptz IS NULL OR d.created_at<=$7)
         AND ($8::text IS NULL OR c.name ILIKE '%'||$8||'%' OR d.merchandise_description ILIKE '%'||$8||'%'
           OR d.destination_snapshot::text ILIKE '%'||$8||'%')
@@ -123,7 +125,7 @@ export function registerDeliveryRoutes(app: FastifyInstance, pools: DbPools, con
             OR (d.scheduled_for IS NULL AND (d.created_at AT TIME ZONE 'America/Fortaleza')::date = $11::date))
           WHEN $10='finished' THEN (coalesce(d.completed_at,d.cancelled_at,d.updated_at) AT TIME ZONE 'America/Fortaleza')::date = $11::date
           ELSE (d.created_at AT TIME ZONE 'America/Fortaleza')::date = $11::date END)
-        ORDER BY d.id DESC LIMIT $9`, [q.status ?? null,q.customerId ?? null,q.addressId ?? null,
+        ORDER BY d.created_at DESC,d.id DESC LIMIT $9`, [q.status ?? null,q.customerId ?? null,q.addressId ?? null,
         identity.role === 'courier' ? identity.membershipId : q.courierMembershipId ?? null,
         q.cursor ?? null,q.from ?? null,q.to ?? null,q.search ?? null,q.limit ?? 50,tab,q.day ?? null]);
       return { items: result.rows, nextCursor: result.rows.at(-1)?.id ?? null };

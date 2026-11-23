@@ -23,6 +23,7 @@ export function createStore(db: StoreDatabase, createId: () => string) {
       payload TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', error TEXT
     );
     CREATE TABLE IF NOT EXISTS route_points (id TEXT PRIMARY KEY, route_id TEXT NOT NULL, payload TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS live_location_points (id TEXT PRIMARY KEY, payload TEXT NOT NULL);
   `);
 
   function deliveries(): Delivery[] {
@@ -92,7 +93,7 @@ export function createStore(db: StoreDatabase, createId: () => string) {
 
   function reset(): void {
     db.withTransactionSync(() => {
-      db.execSync('DELETE FROM deliveries; DELETE FROM metadata; DELETE FROM operations; DELETE FROM route_points;');
+      db.execSync('DELETE FROM deliveries; DELETE FROM metadata; DELETE FROM operations; DELETE FROM route_points; DELETE FROM live_location_points;');
     });
   }
 
@@ -100,7 +101,12 @@ export function createStore(db: StoreDatabase, createId: () => string) {
   function routePoints(routeId:string){return db.getAllSync<{id:string;payload:string}>('SELECT id,payload FROM route_points WHERE route_id=? ORDER BY rowid',routeId);}
   function removeRoutePoints(ids:string[]){db.withTransactionSync(()=>{for(const id of ids)db.runSync('DELETE FROM route_points WHERE id=?',id);});}
   function discardRoutePoints(routeId:string){db.runSync('DELETE FROM route_points WHERE route_id=?',routeId);}
+  function queueLivePoint(payload:Record<string,unknown>):void{db.runSync('INSERT OR IGNORE INTO live_location_points(id,payload) VALUES(?,?)',String(payload.clientPointId),JSON.stringify(payload));}
+  function liveLocationPoints(){return db.getAllSync<{id:string;payload:string}>('SELECT id,payload FROM live_location_points ORDER BY rowid');}
+  function removeLiveLocationPoints(ids:string[]){db.withTransactionSync(()=>{for(const id of ids)db.runSync('DELETE FROM live_location_points WHERE id=?',id);});}
+  function discardLiveLocationPoints(){db.runSync('DELETE FROM live_location_points');}
 
   return { deliveries, getMeta, prepareAccount, enqueue, operations, failedOperations,
-    clearFailed, complete, fail, retryFailed, applySync, reset, queueRoutePoint, routePoints, removeRoutePoints, discardRoutePoints };
+    clearFailed, complete, fail, retryFailed, applySync, reset, queueRoutePoint, routePoints, removeRoutePoints, discardRoutePoints,
+    queueLivePoint, liveLocationPoints, removeLiveLocationPoints, discardLiveLocationPoints };
 }
