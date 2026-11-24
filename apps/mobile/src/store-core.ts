@@ -18,6 +18,7 @@ export function createStore(db: StoreDatabase, createId: () => string) {
   db.execSync(`
     CREATE TABLE IF NOT EXISTS deliveries (id TEXT PRIMARY KEY, payload TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS work_shifts (account TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS operations (
       id TEXT PRIMARY KEY, delivery_id TEXT NOT NULL, kind TEXT NOT NULL,
       payload TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', error TEXT
@@ -106,7 +107,22 @@ export function createStore(db: StoreDatabase, createId: () => string) {
   function removeLiveLocationPoints(ids:string[]){db.withTransactionSync(()=>{for(const id of ids)db.runSync('DELETE FROM live_location_points WHERE id=?',id);});}
   function discardLiveLocationPoints(){db.runSync('DELETE FROM live_location_points');}
 
-  return { deliveries, getMeta, prepareAccount, enqueue, operations, failedOperations,
+  function getShiftState() {
+    return db.getFirstSync<{value:string}>('SELECT value FROM work_shifts WHERE account=?',getMeta('accountKey')??'')?.value;
+  }
+  function setShiftState(value:string|null) {
+    const account=getMeta('accountKey');
+    if(!account)return;
+    if(value===null)db.runSync('DELETE FROM work_shifts WHERE account=?',account);
+    else db.runSync('INSERT OR REPLACE INTO work_shifts(account,value) VALUES (?,?)',account,value);
+  }
+  function cacheProofCount(id:string,count:number) {
+    db.runSync('INSERT OR REPLACE INTO metadata(key,value) VALUES (?,?)', 'proofCount:'+id,String(count));
+  }
+  function cacheRouteOverview(value:string) {
+    db.runSync("INSERT OR REPLACE INTO metadata(key,value) VALUES ('routeOverview',?)",value);
+  }
+  return { deliveries, getMeta, getShiftState, setShiftState, cacheProofCount, cacheRouteOverview, prepareAccount, enqueue, operations, failedOperations,
     clearFailed, complete, fail, retryFailed, applySync, reset, queueRoutePoint, routePoints, removeRoutePoints, discardRoutePoints,
     queueLivePoint, liveLocationPoints, removeLiveLocationPoints, discardLiveLocationPoints };
 }

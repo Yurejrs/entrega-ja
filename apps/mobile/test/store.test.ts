@@ -137,3 +137,20 @@ test('a failed operation can be explicitly returned to the automatic retry queue
   assert.equal(store.operations().length, 1);
   connection.close();
 });
+
+test('an offline clock-out survives logout and belongs only to its courier', () => {
+  const db = new DatabaseSync(':memory:');
+  const store = createStore(adapter(db), () => 'operation');
+  const courier = accountKey('tenant','first');
+  const exit = JSON.stringify({id:'shift',startedAt:'2026-11-24T09:00:00Z',stoppedAt:'2026-11-24T17:00:00Z'});
+  store.prepareAccount(courier);
+  store.setShiftState(exit);
+  store.reset();
+  store.prepareAccount(accountKey('tenant','second'));
+  assert.equal(store.getShiftState(),undefined);
+  store.prepareAccount(courier);
+  assert.equal(store.getShiftState(),exit);
+  store.setShiftState(null);
+  assert.equal(store.getShiftState(),undefined);
+  db.close();
+});

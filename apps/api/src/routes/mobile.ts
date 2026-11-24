@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import type { FastifyInstance } from 'fastify';
 import type { ApiConfig } from '../config.js';
 import type { DbPools } from '../db.js';
@@ -9,6 +10,13 @@ import { sha256 } from '../security.js';
 import { lockOperation } from './deliveries.js';
 
 const uuid = { type: 'string', format: 'uuid' };
+
+async function shiftStart(client:PoolClient, shiftId:string|undefined) {
+  const result=await client.query<{started_at:Date}>(`SELECT started_at FROM app.courier_location_sharing
+    WHERE courier_membership_id=app.current_membership_id() AND status='active' AND shift_id=$1 FOR UPDATE`,[shiftId??null]);
+  if(!result.rows[0]) conflict('Registre a entrada para compartilhar a localização.');
+  return result.rows[0].started_at.getTime();
+}
 
 export function registerMobileRoutes(app: FastifyInstance, pools: DbPools, config: ApiConfig): void {
   app.get('/v1/mobile/location-consent',{schema:{tags:['mobile']}},async request=>{
@@ -29,17 +37,30 @@ export function registerMobileRoutes(app: FastifyInstance, pools: DbPools, confi
     const {identity}=await authenticate(request,pools);if(identity.role!=='courier'||identity.scope!=='tenant')forbidden();
     return withTenant(pools,identity,async client=>{const result=await client.query('SELECT status,started_at,stopped_at,last_seen_at FROM app.courier_location_sharing WHERE courier_membership_id=app.current_membership_id()');const row=result.rows[0];return {enabled:row?.status==='active',status:row?.status??'inactive',startedAt:row?.started_at??null,stoppedAt:row?.stopped_at??null,lastSeenAt:row?.last_seen_at??null};});
   });
-  app.put('/v1/mobile/location-sharing',{schema:{tags:['mobile'],body:{type:'object',required:['enabled'],properties:{enabled:{type:'boolean'}},additionalProperties:false}}},async request=>{
-    const {identity}=await authenticate(request,pools);if(identity.role!=='courier'||identity.scope!=='tenant')forbidden();const {enabled}=request.body as {enabled:boolean};
+  app.put('/v1/mobile/location-sharing',{schema:{tags:['mobile'],body:{type:'object',required:['enabled'],properties:{enabled:{type:'boolean'},shiftId:uuid,stoppedAt:{type:'string',format:'date-time'}},additionalProperties:false}}},async request=>{
+    const {identity}=await authenticate(request,pools);if(identity.role!=='courier'||identity.scope!=='tenant')forbidden();const {enabled,shiftId,stoppedAt}=request.body as {enabled:boolean;shiftId?:string;stoppedAt?:string};
+    if(!shiftId) conflict('Atualize o aplicativo para registrar o ponto.');
     return withTenant(pools,identity,async client=>{
       if(enabled){const consent=await client.query('SELECT 1 FROM app.location_policy_consents WHERE membership_id=app.current_membership_id() AND policy_version=$1',[config.locationPolicyVersion]);if(!consent.rowCount)badRequest('Leia e aceite a política de localização antes de ativar o compartilhamento.');
-        const result=await client.query(`INSERT INTO app.courier_location_sharing(tenant_id,courier_membership_id,status,started_at,stopped_at,updated_at) VALUES(app.current_tenant_id(),app.current_membership_id(),'active',now(),NULL,now()) ON CONFLICT(tenant_id,courier_membership_id) DO UPDATE SET status='active',started_at=coalesce(app.courier_location_sharing.started_at,now()),stopped_at=NULL,updated_at=now() RETURNING status,started_at,stopped_at,last_seen_at`,[]);const row=result.rows[0];return {enabled:true,...row};}
-      const result=await client.query(`INSERT INTO app.courier_location_sharing(tenant_id,courier_membership_id,status,stopped_at,updated_at) VALUES(app.current_tenant_id(),app.current_membership_id(),'inactive',now(),now()) ON CONFLICT(tenant_id,courier_membership_id) DO UPDATE SET status='inactive',stopped_at=now(),updated_at=now() RETURNING status,started_at,stopped_at,last_seen_at`,[]);const row=result.rows[0];return {enabled:false,...row};
+        const result=await client.query(`INSERT INTO app.courier_location_sharing(tenant_id,courier_membership_id,status,shift_id,started_at)
+          VALUES(app.current_tenant_id(),app.current_membership_id(),'active',$1,date_trunc('milliseconds',now()))
+          ON CONFLICT(tenant_id,courier_membership_id) DO UPDATE SET status='active',shift_id=excluded.shift_id,
+          started_at=CASE WHEN courier_location_sharing.shift_id=excluded.shift_id THEN courier_location_sharing.started_at ELSE excluded.started_at END,
+          stopped_at=NULL,last_seen_at=NULL,updated_at=now()
+          WHERE courier_location_sharing.status='active' OR courier_location_sharing.shift_id IS DISTINCT FROM excluded.shift_id
+          RETURNING started_at`,[shiftId]);
+        if(!result.rowCount) conflict('Esta entrada já foi encerrada. Registre uma nova entrada.');
+        return {enabled:true,startedAt:result.rows[0].started_at};
+      }
+      await client.query(`UPDATE app.courier_location_sharing SET status='inactive',stopped_at=greatest(started_at,least(now(),coalesce($2::timestamptz,now()))),updated_at=now()
+        WHERE courier_membership_id=app.current_membership_id() AND shift_id=$1 AND status='active'`,[shiftId,stoppedAt??null]);
+      return {enabled:false};
+
     });
   });
-  app.post('/v1/mobile/location-sharing/locations',{config:{rateLimit:{max:120,timeWindow:'1 minute'}},schema:{tags:['mobile'],body:{type:'object',required:['points'],properties:{points:{type:'array',minItems:1,maxItems:100,items:{type:'object',required:['clientPointId','latitude','longitude','accuracyM','capturedAt'],properties:{clientPointId:uuid,latitude:{type:'number',minimum:-90,maximum:90},longitude:{type:'number',minimum:-180,maximum:180},accuracyM:{type:'number',minimum:0},capturedAt:{type:'string',format:'date-time'}},additionalProperties:false}}},additionalProperties:false}}},async request=>{
-    const {identity}=await authenticate(request,pools);if(identity.role!=='courier'||identity.scope!=='tenant')forbidden();const {points}=request.body as {points:Array<{clientPointId:string;latitude:number;longitude:number;accuracyM:number;capturedAt:string}>};
-    return withTenant(pools,identity,async client=>{const sharing=await client.query("SELECT 1 FROM app.courier_location_sharing WHERE courier_membership_id=app.current_membership_id() AND status='active'");if(!sharing.rowCount)conflict('Compartilhamento de localização desativado.');const now=Date.now();const maxAgeMs=(config.gpsMaxAgeDays??30)*86400000;const maxFutureMs=(config.gpsMaxFutureSkewSeconds??300)*1000;for(const p of points){const capturedAt=Date.parse(p.capturedAt);if(!Number.isFinite(capturedAt)||capturedAt>now+maxFutureMs)badRequest('Ponto GPS futuro ou com data inválida');if(capturedAt<now-maxAgeMs)badRequest('Ponto GPS antigo demais para sincronização');await client.query('INSERT INTO app.courier_locations(tenant_id,courier_membership_id,client_point_id,latitude,longitude,accuracy_m,captured_at) VALUES(app.current_tenant_id(),app.current_membership_id(),$1,$2,$3,$4,$5) ON CONFLICT(tenant_id,client_point_id) DO NOTHING',[p.clientPointId,p.latitude,p.longitude,p.accuracyM,p.capturedAt]);}await client.query('UPDATE app.courier_location_sharing SET last_seen_at=now(),updated_at=now() WHERE courier_membership_id=app.current_membership_id()');return {accepted:points.length,confirmedClientPointIds:points.map(point=>point.clientPointId)};});
+  app.post('/v1/mobile/location-sharing/locations',{config:{rateLimit:{max:120,timeWindow:'1 minute'}},schema:{tags:['mobile'],body:{type:'object',required:['points'],properties:{shiftId:uuid,points:{type:'array',minItems:1,maxItems:100,items:{type:'object',required:['clientPointId','latitude','longitude','accuracyM','capturedAt'],properties:{clientPointId:uuid,latitude:{type:'number',minimum:-90,maximum:90},longitude:{type:'number',minimum:-180,maximum:180},accuracyM:{type:'number',minimum:0},capturedAt:{type:'string',format:'date-time'}},additionalProperties:false}}},additionalProperties:false}}},async request=>{
+    const {identity}=await authenticate(request,pools);if(identity.role!=='courier'||identity.scope!=='tenant')forbidden();const {points,shiftId}=request.body as {shiftId?:string;points:Array<{clientPointId:string;latitude:number;longitude:number;accuracyM:number;capturedAt:string}>};
+    return withTenant(pools,identity,async client=>{const start=await shiftStart(client,shiftId);const now=Date.now();const maxAgeMs=(config.gpsMaxAgeDays??30)*86400000;const maxFutureMs=(config.gpsMaxFutureSkewSeconds??300)*1000;for(const p of points){const capturedAt=Date.parse(p.capturedAt);if(!Number.isFinite(capturedAt)||capturedAt>now+maxFutureMs)badRequest('Ponto GPS futuro ou com data inválida');if(capturedAt<start)badRequest('Posição anterior à entrada no trabalho.');if(capturedAt<now-maxAgeMs)badRequest('Ponto GPS antigo demais para sincronização');await client.query('INSERT INTO app.courier_locations(tenant_id,courier_membership_id,client_point_id,latitude,longitude,accuracy_m,captured_at) VALUES(app.current_tenant_id(),app.current_membership_id(),$1,$2,$3,$4,$5) ON CONFLICT(tenant_id,client_point_id) DO NOTHING',[p.clientPointId,p.latitude,p.longitude,p.accuracyM,p.capturedAt]);}await client.query('UPDATE app.courier_location_sharing SET last_seen_at=now(),updated_at=now() WHERE courier_membership_id=app.current_membership_id()');return {accepted:points.length,confirmedClientPointIds:points.map(point=>point.clientPointId)};});
   });
   app.post('/v1/mobile/routes', { schema:{tags:['mobile'],body:{type:'object',required:['deliveryIds'],properties:{deliveryIds:{type:'array',minItems:1,maxItems:50,items:uuid}},additionalProperties:false}}}, async request=>{
     const {identity}=await authenticate(request,pools);if(identity.role!=='courier'||identity.scope!=='tenant')forbidden();
@@ -66,11 +87,22 @@ export function registerMobileRoutes(app: FastifyInstance, pools: DbPools, confi
   });
   app.get('/v1/mobile/routes/:id',{schema:{tags:['mobile'],params:{type:'object',required:['id'],properties:{id:uuid}}}},async request=>{
     const {identity}=await authenticate(request,pools);if(identity.role!=='courier'||identity.scope!=='tenant')forbidden();const {id}=request.params as {id:string};
-    return withTenant(pools,identity,async client=>{const result=await client.query('SELECT id,status FROM app.delivery_routes WHERE id=$1 AND courier_membership_id=$2',[id,identity.membershipId]);return result.rows[0]??notFound();});
+    return withTenant(pools,identity,async client=>{
+      const result=await client.query('SELECT id,status FROM app.delivery_routes WHERE id=$1 AND courier_membership_id=$2',[id,identity.membershipId]);
+      const route=result.rows[0]??notFound();
+      if ((request.query as {include?:string}).include !== 'stops') return route;
+      const stops=await client.query(`SELECT s.delivery_id AS id,s.status,c.name AS customer,
+        d.destination_snapshot AS address,d.status AS delivery_status,
+        EXISTS (SELECT 1 FROM app.delivery_events e WHERE e.delivery_id=d.id AND e.kind='check_in') AS checked
+        FROM app.delivery_route_stops s JOIN app.deliveries d ON d.id=s.delivery_id AND d.tenant_id=s.tenant_id
+        JOIN app.customers c ON c.id=d.customer_id AND c.tenant_id=d.tenant_id
+        WHERE s.route_id=$1 AND s.status <> 'skipped' ORDER BY s.position`,[id]);
+      return {...route,stops:stops.rows};
+    });
   });
-  app.post('/v1/mobile/routes/:id/locations',{config:{rateLimit:{max:120,timeWindow:'1 minute'}},schema:{tags:['mobile'],params:{type:'object',required:['id'],properties:{id:uuid}},body:{type:'object',required:['points'],properties:{points:{type:'array',minItems:1,maxItems:100,items:{type:'object',required:['clientPointId','latitude','longitude','accuracyM','capturedAt'],properties:{clientPointId:uuid,latitude:{type:'number',minimum:-90,maximum:90},longitude:{type:'number',minimum:-180,maximum:180},accuracyM:{type:'number',minimum:0},capturedAt:{type:'string',format:'date-time'}},additionalProperties:false}}},additionalProperties:false}}},async request=>{
-    const {identity}=await authenticate(request,pools);if(identity.role!=='courier'||identity.scope!=='tenant')forbidden();const {id}=request.params as {id:string};const {points}=request.body as {points:Array<{clientPointId:string;latitude:number;longitude:number;accuracyM:number;capturedAt:string}>};
-    return withTenant(pools,identity,async client=>{const route=await client.query("SELECT id FROM app.delivery_routes WHERE id=$1 AND courier_membership_id=$2 AND status='active'",[id,identity.membershipId]);if(!route.rowCount)notFound();const now=Date.now();const maxAgeMs=(config.gpsMaxAgeDays??30)*86400000;const maxFutureMs=(config.gpsMaxFutureSkewSeconds??300)*1000;let accepted=0,lowPrecision=0;for(const p of points){const capturedAt=Date.parse(p.capturedAt);if(!Number.isFinite(capturedAt)||capturedAt>now+maxFutureMs)badRequest('Ponto GPS futuro ou com data inválida');if(capturedAt<now-maxAgeMs)badRequest('Ponto GPS antigo demais para sincronização');if(p.accuracyM>(config.gpsLowPrecisionThresholdM??200))lowPrecision++;const r=await client.query('INSERT INTO app.delivery_route_locations(tenant_id,route_id,client_point_id,courier_membership_id,latitude,longitude,accuracy_m,captured_at) VALUES(app.current_tenant_id(),$1,$2,$3,$4,$5,$6,$7) ON CONFLICT(tenant_id,client_point_id) DO NOTHING',[id,p.clientPointId,identity.membershipId,p.latitude,p.longitude,p.accuracyM,p.capturedAt]);accepted+=r.rowCount??0;}return {accepted,lowPrecision,confirmedClientPointIds:points.map(point=>point.clientPointId)};});
+  app.post('/v1/mobile/routes/:id/locations',{config:{rateLimit:{max:120,timeWindow:'1 minute'}},schema:{tags:['mobile'],params:{type:'object',required:['id'],properties:{id:uuid}},body:{type:'object',required:['points'],properties:{shiftId:uuid,points:{type:'array',minItems:1,maxItems:100,items:{type:'object',required:['clientPointId','latitude','longitude','accuracyM','capturedAt'],properties:{clientPointId:uuid,latitude:{type:'number',minimum:-90,maximum:90},longitude:{type:'number',minimum:-180,maximum:180},accuracyM:{type:'number',minimum:0},capturedAt:{type:'string',format:'date-time'}},additionalProperties:false}}},additionalProperties:false}}},async request=>{
+    const {identity}=await authenticate(request,pools);if(identity.role!=='courier'||identity.scope!=='tenant')forbidden();const {id}=request.params as {id:string};const {points,shiftId}=request.body as {shiftId?:string;points:Array<{clientPointId:string;latitude:number;longitude:number;accuracyM:number;capturedAt:string}>};
+    return withTenant(pools,identity,async client=>{const route=await client.query("SELECT id FROM app.delivery_routes WHERE id=$1 AND courier_membership_id=$2 AND status='active'",[id,identity.membershipId]);if(!route.rowCount)notFound();const start=await shiftStart(client,shiftId);const now=Date.now();const maxAgeMs=(config.gpsMaxAgeDays??30)*86400000;const maxFutureMs=(config.gpsMaxFutureSkewSeconds??300)*1000;let accepted=0,lowPrecision=0;for(const p of points){const capturedAt=Date.parse(p.capturedAt);if(!Number.isFinite(capturedAt)||capturedAt>now+maxFutureMs)badRequest('Ponto GPS futuro ou com data inválida');if(capturedAt<start)badRequest('Posição anterior à entrada no trabalho.');if(capturedAt<now-maxAgeMs)badRequest('Ponto GPS antigo demais para sincronização');if(p.accuracyM>(config.gpsLowPrecisionThresholdM??200))lowPrecision++;const r=await client.query('INSERT INTO app.delivery_route_locations(tenant_id,route_id,client_point_id,courier_membership_id,latitude,longitude,accuracy_m,captured_at) VALUES(app.current_tenant_id(),$1,$2,$3,$4,$5,$6,$7) ON CONFLICT(tenant_id,client_point_id) DO NOTHING',[id,p.clientPointId,identity.membershipId,p.latitude,p.longitude,p.accuracyM,p.capturedAt]);accepted+=r.rowCount??0;}return {accepted,lowPrecision,confirmedClientPointIds:points.map(point=>point.clientPointId)};});
   });
   app.get('/v1/tenant/routes/:id/live', { schema: { tags:['tenant'], params:{type:'object',required:['id'],properties:{id:uuid}} } }, async request => {
     const {identity}=await authenticate(request,pools); if(identity.role!=='admin'||identity.scope!=='tenant') forbidden();
@@ -438,11 +470,11 @@ export function registerMobileRoutes(app: FastifyInstance, pools: DbPools, confi
         photo = await part.toBuffer();
       } else fields[part.fieldname] = String(part.value);
     }
-    if (!photo || !fields.clientOperationId || !fields.occurredAt ||
+    if (!fields.clientOperationId || !fields.occurredAt ||
       !/^[0-9a-f-]{36}$/i.test(fields.clientOperationId) || Number.isNaN(Date.parse(fields.occurredAt))) badRequest('Dados da conclusão inválidos');
-    const prepared = await preparePhoto(photo,declaredMime);
+    const prepared = photo ? await preparePhoto(photo,declaredMime) : null;
     const requestHash = sha256(JSON.stringify({ id, kind: 'completed', operation: fields.clientOperationId,
-      occurredAt: fields.occurredAt, note: fields.note ?? '', photoHash: prepared.sourceHash }));
+      occurredAt: fields.occurredAt, note: fields.note ?? '', photoHash: prepared?.sourceHash ?? null }));
     const pendingFiles: string[] = [];
     try {
       return await withTenant(pools,identity,async client => {
@@ -463,21 +495,27 @@ export function registerMobileRoutes(app: FastifyInstance, pools: DbPools, confi
           AND actor_membership_id=$2 AND kind='check_in' AND recorded_at>=coalesce($3::timestamptz,'-infinity'::timestamptz)
           LIMIT 1`, [id,identity.membershipId,current.assigned_at]);
         if (!checkIn.rowCount) conflict('Check-in necessário antes da conclusão');
-        await client.query('SELECT pg_advisory_xact_lock(hashtextextended(app.current_tenant_id()::text,0))');
-        const quota = await client.query<{ max_storage_bytes: string | null; used_storage_bytes: string }>(
-          'SELECT max_storage_bytes,used_storage_bytes FROM app.active_plan_limits()');
-        if (!quota.rows[0]) forbidden();
-        if (quota.rows[0].max_storage_bytes !== null &&
-          BigInt(quota.rows[0].used_storage_bytes) + BigInt(prepared.bytes.length) > BigInt(quota.rows[0].max_storage_bytes!))
-          conflict('Limite de armazenamento atingido');
-        const tenant = await client.query<{ id: string }>('SELECT app.current_tenant_id() AS id');
-        const saved = await savePhoto(config,tenant.rows[0]!.id,id,prepared.bytes);
-        pendingFiles.push(saved.key);
+        let saved: Awaited<ReturnType<typeof savePhoto>> | undefined;
+        if (prepared) {
+          await client.query('SELECT pg_advisory_xact_lock(hashtextextended(app.current_tenant_id()::text,0))');
+          const quota = await client.query<{ max_storage_bytes: string | null; used_storage_bytes: string }>(
+            'SELECT max_storage_bytes,used_storage_bytes FROM app.active_plan_limits()');
+          if (!quota.rows[0]) forbidden();
+          if (quota.rows[0].max_storage_bytes !== null &&
+            BigInt(quota.rows[0].used_storage_bytes) + BigInt(prepared.bytes.length) > BigInt(quota.rows[0].max_storage_bytes!))
+            conflict('Limite de armazenamento atingido');
+          const tenant = await client.query<{ id: string }>('SELECT app.current_tenant_id() AS id');
+          saved = await savePhoto(config,tenant.rows[0]!.id,id,prepared.bytes);
+          pendingFiles.push(saved.key);
+        } else {
+          const proof = await client.query('SELECT 1 FROM app.delivery_photos WHERE delivery_id=$1 LIMIT 1', [id]);
+          if (!proof.rowCount) conflict('Adicione uma foto desta entrega antes de concluir.');
+        }
         const event = await client.query<{ id: string }>(`INSERT INTO app.delivery_events
           (tenant_id,delivery_id,actor_membership_id,kind,occurred_at,note,client_operation_id,metadata)
           VALUES (app.current_tenant_id(),$1,$2,'completed',$3,$4,$5,jsonb_build_object('request_hash',$6::text)) RETURNING id`,
           [id,identity.membershipId,fields.occurredAt,fields.note ?? null,fields.clientOperationId,requestHash]);
-        await client.query(`INSERT INTO app.delivery_photos(tenant_id,delivery_id,event_id,storage_key,mime_type,byte_size,sha256,captured_at)
+        if (saved) await client.query(`INSERT INTO app.delivery_photos(tenant_id,delivery_id,event_id,storage_key,mime_type,byte_size,sha256,captured_at)
           VALUES (app.current_tenant_id(),$1,$2,$3,$4,$5,$6,$7)`,
           [id,event.rows[0]!.id,saved.key,saved.mime,saved.size,saved.hash,fields.occurredAt]);
         await client.query(`UPDATE app.deliveries SET status='completed',completed_at=now(),updated_at=now() WHERE id=$1`, [id]);
@@ -490,6 +528,7 @@ export function registerMobileRoutes(app: FastifyInstance, pools: DbPools, confi
         for (const route of stopped.rows) {
           await client.query(`UPDATE app.delivery_route_stops SET status='active'
             WHERE tenant_id=$1 AND route_id=$2 AND status='pending'
+              AND NOT EXISTS(SELECT 1 FROM app.delivery_route_stops WHERE tenant_id=$1 AND route_id=$2 AND status='active')
               AND position=(SELECT min(position) FROM app.delivery_route_stops WHERE tenant_id=$1 AND route_id=$2 AND status='pending')`,[route.tenant_id,route.route_id]);
           await client.query(`UPDATE app.delivery_routes SET status='completed',completed_at=now()
             WHERE tenant_id=$1 AND id=$2 AND status='active'

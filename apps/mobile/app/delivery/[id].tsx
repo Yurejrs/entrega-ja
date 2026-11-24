@@ -1,3 +1,4 @@
+import { FacadeCard } from '../../src/FacadeCard';
 import { useEffect, useMemo, useState } from 'react';
 import {
   Alert, Image, Linking, Modal, Pressable, ScrollView, StatusBar, StyleSheet, Text, Vibration,
@@ -10,7 +11,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as SecureStore from 'expo-secure-store';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { randomUUID } from 'expo-crypto';
-import { deliveries, enqueue, operations, failedOperations } from '../../src/store';
+import { cacheProofCount, getMeta, deliveries, enqueue, operations, failedOperations } from '../../src/store';
 import { localDeliveryPhotos, type LocalDeliveryPhoto } from '../../src/local-photos';
 import { flushOperations, syncDeliveries } from '../../src/sync';
 import { styles as sharedStyles } from '../index';
@@ -164,6 +165,7 @@ export default function Detail() {
     setPhotosError('');
     try {
       const result = await request<{ items: DeliveryPhoto[]; nextCursor: string | null }>(`/deliveries/${id}/photos?limit=50`);
+      cacheProofCount(id,result.items.length);
       setPhotos(result.items);
     } catch (error) {
       setPhotosError((error as Error).message);
@@ -197,7 +199,9 @@ export default function Detail() {
   const queued = operations().filter(operation => operation.delivery_id === item.id);
   const failed = failedOperations().filter(operation => operation.delivery_id === item.id);
   const localPhotos = localDeliveryPhotos([...queued, ...failed], item.id);
-  const hasRequiredCompletionData = canComplete(!!checkInPoint, photos.length + localPhotos.length);
+  const remoteCount = Number(getMeta('proofCount:'+item.id) ?? photos.length);
+  const proofCount = remoteCount + localPhotos.filter(photo => photo.status === 'pending').length;
+  const hasRequiredCompletionData = canComplete(!!checkInPoint, proofCount);
   const active = item.status === 'assigned' || item.status === 'in_progress' || item.status === 'problem';
   const mapPoint = checkInPoint ?? coords ?? geocodedPoint;
   const mapPointLabel = localCheckIn ? 'Local do check-in salvo no aparelho'
@@ -248,13 +252,6 @@ export default function Detail() {
           longitude: position.coords.longitude,
           accuracyM: Math.max(0, position.coords.accuracy ?? 0),
         };
-      }
-      if (kind === 'completion') {
-        const image = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.7 });
-        if (image.canceled) return;
-        const photoUri = `${FileSystem.documentDirectory}proof-${randomUUID()}.jpg`;
-        await FileSystem.copyAsync({ from: image.assets[0].uri, to: photoUri });
-        payload.photoUri = photoUri;
       }
       if (kind === 'problem' && problemPhotoUri) payload.photoUri = problemPhotoUri;
       const operationId = enqueue(item.id, kind, payload);
@@ -326,6 +323,7 @@ export default function Detail() {
           {checkInDistanceM !== null && <Text style={detailStyles.distanceHint}>Distância aproximada no último check-in: {Math.round(checkInDistanceM)} m</Text>}
         </View>
 
+        <FacadeCard key={item.id} deliveryId={item.id}/>
         <View style={detailStyles.card}>
           <Text style={detailStyles.sectionTitle}>Volumes</Text>
           {item.items?.length?item.items.map(volume=><View key={volume.id} style={{flexDirection:'row',alignItems:'center',gap:7}}><VolumeIcon/><Text style={detailStyles.infoText}>{volume.quantity}× {volume.name}</Text></View>):<Text style={detailStyles.infoText}>{item.merchandise_description}</Text>}
@@ -339,7 +337,7 @@ export default function Detail() {
 
         <View style={detailStyles.card}>
           <View style={detailStyles.sectionHeader}>
-            <Text style={detailStyles.sectionTitle}>Fotos ({photos.length + localPhotos.length})</Text>
+            <Text style={detailStyles.sectionTitle}>Fotos ({remoteCount + localPhotos.length})</Text>
             <Pressable onPress={addPhoto} disabled={busy} accessibilityRole="button"><Text style={sharedStyles.link}>Adicionar foto</Text></Pressable>
           </View>
           {photosLoading && <Text style={detailStyles.addressHint}>Carregando fotos…</Text>}
@@ -381,11 +379,11 @@ export default function Detail() {
           <View style={detailStyles.inlineActions}><Pressable style={detailStyles.secondaryButton} onPress={saveNote} disabled={!note.trim() || note.trim() === savedNote.trim()}><Text style={detailStyles.secondaryButtonText}>Salvar observação</Text></Pressable><Pressable style={detailStyles.dangerButton} onPress={() => setProblemOpen(true)} disabled={busy}><Text style={detailStyles.dangerButtonText}>Registrar problema</Text></Pressable></View>
         </View>}
 
-        <View style={detailStyles.card}><Text style={detailStyles.sectionTitle}>Para concluir</Text><Text style={detailStyles.infoText}>{checkInPoint ? '✓ Check-in no local' : '○ Check-in no local'}</Text><Text style={detailStyles.infoText}>{photos.length + localPhotos.length > 0 ? '✓ Pelo menos 1 foto enviada' : '○ Pelo menos 1 foto enviada'}</Text></View>
+        <View style={detailStyles.card}><Text style={detailStyles.sectionTitle}>Para concluir</Text><Text style={detailStyles.infoText}>{checkInPoint ? '✓ Check-in no local' : '○ Check-in no local'}</Text><Text style={detailStyles.infoText}>{proofCount > 0 ? '✓ Foto da entrega registrada' : '○ Adicionar foto da entrega'}</Text></View>
         {!active && <Text style={detailStyles.closedHint}>Esta entrega não permite novas operações.</Text>}
       </ScrollView>
       </SafeAreaView>
-      {active && <View style={detailStyles.footer}><Text style={detailStyles.footerHint}>{!hasRequiredCompletionData ? 'Para concluir: faça o check-in e envie 1 foto.' : ''}</Text><Pressable style={[sharedStyles.primaryButton, !hasRequiredCompletionData && detailStyles.disabledButton]} accessibilityRole="button" accessibilityState={{ disabled: !hasRequiredCompletionData }} disabled={!hasRequiredCompletionData || busy} onPress={() => setConfirmation('completion')}><Text style={sharedStyles.primaryButtonText}>Concluir entrega</Text></Pressable></View>}
+      {active && <View style={detailStyles.footer}><Text style={detailStyles.footerHint}>{!checkInPoint ? 'Faça o check-in no local para concluir.' : proofCount === 0 ? 'Adicione uma foto da entrega para concluir.' : ''}</Text><Pressable style={[sharedStyles.primaryButton, !hasRequiredCompletionData && detailStyles.disabledButton]} accessibilityRole="button" accessibilityState={{ disabled: !hasRequiredCompletionData }} disabled={!hasRequiredCompletionData || busy} onPress={() => setConfirmation('completion')}><Text style={sharedStyles.primaryButtonText}>Concluir entrega</Text></Pressable></View>}
       {!!toast && <View style={detailStyles.toast}><Text style={detailStyles.toastText}>{toast}</Text></View>}
 
       <Modal visible={problemOpen} transparent animationType="slide" onRequestClose={() => setProblemOpen(false)}>

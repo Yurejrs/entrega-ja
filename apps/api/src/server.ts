@@ -13,6 +13,7 @@ import { registerAuthRoutes } from './routes/auth.js';
 import { registerPlatformRoutes } from './routes/platform.js';
 import { registerTenantRoutes } from './routes/tenant.js';
 import { registerDeliveryRoutes } from './routes/deliveries.js';
+import { registerFacadeRoutes } from './routes/facades.js';
 import { registerMobileRoutes } from './routes/mobile.js';
 import { classifyFailure, incrementMetric, metricsSnapshot } from './observability.js';
 
@@ -57,6 +58,7 @@ export async function buildServer(config: ApiConfig, injectedPools?: DbPools) {
   registerPlatformRoutes(app, pools);
   registerTenantRoutes(app, pools, config);
   registerDeliveryRoutes(app, pools, config);
+  registerFacadeRoutes(app, pools);
   registerMobileRoutes(app, pools, config);
   app.addHook('onClose', async () => { if (!injectedPools) await pools.close(); });
   return { app, pools };

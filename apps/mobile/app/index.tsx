@@ -21,8 +21,10 @@ import { Logo, brand } from '../src/brand';
 import { deliveryStatusLabel } from '../src/status';
 import { accountKey } from '../src/account-key';
 import { cancelRouteTracking, resumeRouteTracking, startRouteTracking } from '../src/route-tracking';
+import { activeShift, currentShift, syncExit } from '../src/work-shift';
 import { resumeLiveLocation, startLiveLocation, stopLiveLocation } from '../src/live-location';
 import { toggleRouteSelection } from '../src/route-selection';
+import { RouteOverview, seedRouteOverview } from '../src/RouteOverview';
 import { ConfirmModal, EmptyState, Icon, ProgressRing, StatusChip } from '../src/design-system';
 
 type MainTab = 'ritmo' | 'deliveries' | 'profile' | 'settings';
@@ -321,8 +323,14 @@ export default function Home() {
       setReady(true);
     });
     SecureStore.getItemAsync('activeRouteId').then(setActiveRouteId).catch(() => {});
-    SecureStore.getItemAsync('liveLocationEnabled').then(value => { setLiveLocationEnabled(value === 'true'); if (value === 'true') void resumeLiveLocation().catch(() => {}); }).catch(() => {});
+
   }, []);
+
+  useEffect(()=>{
+    if(!authed)return;
+    setLiveLocationEnabled(!!activeShift());
+    void resumeLiveLocation().catch(()=>{});
+  },[authed]);
 
   useFocusEffect(useCallback(() => {
     if (authed) setItems(deliveries());
@@ -383,6 +391,7 @@ export default function Home() {
   async function refresh() {
     setBusy(true);
     try {
+      if(currentShift()?.stoppedAt && !locationBusy)await syncExit().catch(()=>{});
       await resumeRouteTracking().catch(()=>{});
       setActiveRouteId(await SecureStore.getItemAsync('activeRouteId'));
       await flushOperations();
@@ -403,6 +412,8 @@ export default function Home() {
       setProductivity(nextProductivity);
     } catch (error) {
       if ((error as { status?: number }).status === 401) {
+        await stopLiveLocation();
+        setLiveLocationEnabled(false);
         await SecureStore.deleteItemAsync('session');
         setItems([]);
         setAuthed(false);
@@ -416,7 +427,7 @@ export default function Home() {
   useEffect(() => {
     if (!authed) return;
     let mounted=true;
-      const updateProductivity=()=>{request<Productivity>(`/mobile/productivity?period=${period}`).then(attachLeaderboardPhotos).then(value=>{if(mounted){void SecureStore.setItemAsync('celebrationEnabled',String(value.celebrationEnabled !== false));void SecureStore.setItemAsync('problemReasons',JSON.stringify(value.problemReasons ?? []));setProductivity(value)}}).catch(()=>{});};
+      const updateProductivity=()=>{setLiveLocationEnabled(!!activeShift());void syncExit().catch(()=>{});request<Productivity>(`/mobile/productivity?period=${period}`).then(attachLeaderboardPhotos).then(value=>{if(mounted){void SecureStore.setItemAsync('celebrationEnabled',String(value.celebrationEnabled !== false));void SecureStore.setItemAsync('problemReasons',JSON.stringify(value.problemReasons ?? []));setProductivity(value)}}).catch(()=>{});};
     updateProductivity();
     const timer=setInterval(updateProductivity,60_000);
     const appState=AppState.addEventListener('change',state=>{if(state==='active')updateProductivity()});
@@ -495,8 +506,8 @@ export default function Home() {
   function callCustomer(item:Delivery){if(!item.customer_phone){Alert.alert('Telefone indisponível','Este cliente não possui telefone cadastrado.');return;}Linking.openURL(`tel:${item.customer_phone}`).catch(()=>Alert.alert('Telefone','Não foi possível abrir o telefone neste aparelho.'));}
   function openDeliveryMap(item:Delivery){const address=item.destination_snapshot??{};const query=[address.street,address.number,address.neighborhood,address.city,address.state,address.postal_code].filter(Boolean).join(', ');const coordinates=address.reference_latitude!=null&&address.reference_longitude!=null?`${address.reference_latitude},${address.reference_longitude}`:query;Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(coordinates)}`).catch(()=>Alert.alert('Mapa','Não foi possível abrir o aplicativo de mapas.'));}
   async function claimDelivery(id:string){try{await request(`/deliveries/${id}/claim`,{method:'POST',body:'{}'});setDeliveryTab('open');await refresh();Alert.alert('Entrega aceita','A entrega agora está na sua lista.')}catch(error){Alert.alert('Entrega indisponível',userFacingError(error,'Não foi possível aceitar esta entrega.'));request<{items:Delivery[]}>('/mobile/available').then(result=>setAvailableDeliveries(result.items)).catch(()=>{});}}
-  async function ensureLocationConsent(){const consent=await request<{accepted:boolean;policyVersion:string}>('/mobile/location-consent');if(consent.accepted)return;await new Promise<void>((resolve,reject)=>Alert.alert('Localização durante a rota','Enquanto uma rota estiver ativa, o Entrega Já coleta sua localização para acompanhamento operacional. Você pode interromper o acompanhamento ao terminar ou cancelar a rota.',[{text:'Agora não',style:'cancel',onPress:()=>reject(new Error('Aceite a política de localização para iniciar a rota.'))},{text:'Aceitar e continuar',onPress:()=>{request('/mobile/location-consent',{method:'POST',body:JSON.stringify({policyVersion:consent.policyVersion})}).then(()=>resolve()).catch(reject)}}]));}
-  async function createAndStartRoute(){try{await ensureLocationConsent();const result=await request<{id:string}>('/mobile/routes',{method:'POST',body:JSON.stringify({deliveryIds:routeSelection})});await startRouteTracking(result.id);setActiveRouteId(result.id);setRouteSelection([]);setRouteSelectionMode(false);Alert.alert('Rota iniciada','O GPS será compartilhado enquanto esta rota estiver ativa.')}catch(error){Alert.alert('Não foi possível iniciar a rota',userFacingError(error,'Tente novamente em instantes.'))}}
+  async function ensureLocationConsent(){const consent=await request<{accepted:boolean;policyVersion:string}>('/mobile/location-consent');if(consent.accepted)return;await new Promise<void>((resolve,reject)=>Alert.alert('Localização durante a rota','O GPS da rota funciona entre a entrada e a saída no ponto de trabalho.',[{text:'Agora não',style:'cancel',onPress:()=>reject(new Error('Aceite a política de localização para iniciar a rota.'))},{text:'Aceitar e continuar',onPress:()=>{request('/mobile/location-consent',{method:'POST',body:JSON.stringify({policyVersion:consent.policyVersion})}).then(()=>resolve()).catch(reject)}}]));}
+  async function createAndStartRoute(){try{await ensureLocationConsent();const result=await request<{id:string}>('/mobile/routes',{method:'POST',body:JSON.stringify({deliveryIds:routeSelection})});await startRouteTracking(result.id);seedRouteOverview(result.id,routeSelection,items);setActiveRouteId(result.id);setRouteSelection([]);setRouteSelectionMode(false);}catch(error){Alert.alert('Não foi possível iniciar a rota',userFacingError(error,'Tente novamente em instantes.'))}}
   function cancelCurrentRoute(){if(!activeRouteId)return;Alert.alert('Cancelar rota?','O acompanhamento GPS será encerrado e as paradas restantes serão canceladas.',[{text:'Voltar',style:'cancel'},{text:'Cancelar rota',style:'destructive',onPress:async()=>{try{await cancelRouteTracking();setActiveRouteId(null);await refresh();Alert.alert('Rota cancelada','O acompanhamento GPS foi encerrado.')}catch(error){Alert.alert('Não foi possível cancelar',userFacingError(error,'Mantenha a internet ativa e tente novamente.'))}}}]);}
 
   async function chooseProfileImage(kind: 'photo' | 'cover') {
@@ -545,7 +556,7 @@ export default function Home() {
         await startLiveLocation();
         setLiveLocationEnabled(true);
       }
-      else { await stopLiveLocation(); setLiveLocationEnabled(false); }
+      else { setLiveLocationEnabled(false); await stopLiveLocation(); }
       setLocationConfirm(null);
     } catch (error) { Alert.alert('Localização', userFacingError(error, 'Não foi possível atualizar o compartilhamento.')); }
     finally { setLocationBusy(false); }
@@ -566,6 +577,7 @@ export default function Home() {
 
   async function leave() {
     await stopLiveLocation().catch(() => {});
+    setLiveLocationEnabled(false);
     await unregisterDevice();
     await signOut();
     reset();
@@ -642,6 +654,18 @@ export default function Home() {
     { id: 'default-gold', title: 'Rota de ouro', hint: 'Alcance 50 entregas concluídas', target: 50 },
   ];
 
+  const shift=currentShift();
+  const shiftCard=<View style={styles.sectionCard}>
+    <Text style={styles.sectionTitle}>Ponto de trabalho</Text>
+    <Text style={styles.settingsRowLabel}>{liveLocationEnabled?'Em expediente':'Fora do expediente'}</Text>
+    <Text style={styles.meta}>{liveLocationEnabled?'A gestão recebe sua localização até você registrar a saída.':'Registre a entrada para compartilhar sua localização durante o trabalho.'}</Text>
+    {liveLocationEnabled && shift && <Text style={styles.meta}>Entrada às {new Date(shift.startedAt).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</Text>}
+    {!liveLocationEnabled && shift?.stoppedAt && !locationBusy && <Text style={styles.meta}>GPS desligado. Saída aguardando sincronização.</Text>}
+    <Pressable style={styles.primaryButton} disabled={locationBusy} accessibilityRole="button"
+      onPress={()=>setLocationConfirm(liveLocationEnabled?'disable':'enable')}>
+      <Text style={styles.primaryButtonText}>{locationBusy?'Registrando…':liveLocationEnabled?'Registrar saída':'Registrar entrada'}</Text>
+    </Pressable>
+  </View>;
   return (
     <SafeAreaView style={styles.safePage} edges={['top', 'bottom']}>
       <View style={styles.appShell}>
@@ -652,6 +676,7 @@ export default function Home() {
 
         <View style={styles.screenBody}>
           {activeTab === 'ritmo' && <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+            {shiftCard}
             <View style={styles.introCard}>
               <View style={styles.introMark}><Icon name="check" color={brand.petroleumDark} size={24}/></View>
               <View style={styles.introText}><Text style={styles.introTitle}>Seu trabalho faz a diferença</Text><Text style={styles.introSubtitle}>Acompanhe cada conquista da sua rota.</Text></View>
@@ -681,6 +706,7 @@ export default function Home() {
             keyExtractor={item => item.id}
             contentContainerStyle={deliveryRows.length ? styles.list : styles.listEmpty}
             ListHeaderComponent={<View style={styles.deliveryHeader}>
+              {activeRouteId && <RouteOverview key={activeRouteId} id={activeRouteId} items={items}/>}
               {deliveryTab==='open'&&<>{activeRouteId&&<Pressable style={[styles.secondarySync,{marginTop:10}]} onPress={cancelCurrentRoute} accessibilityRole="button"><Text style={styles.secondarySyncText}>Cancelar rota ativa</Text></Pressable>}{!activeRouteId && routeCandidates.length > 0 && <Pressable style={[styles.secondarySync,{marginTop:10},routeSelectionMode&&styles.routeSelectionToggleActive]} onPress={()=>{setRouteSelectionMode(mode=>{if(mode)setRouteSelection([]);return !mode;})}} accessibilityRole="button" accessibilityState={{selected:routeSelectionMode}}><Text style={[styles.secondarySyncText,routeSelectionMode&&styles.routeSelectionToggleTextActive]}>{routeSelectionMode?'Cancelar montagem da rota':'Montar rota'}</Text></Pressable>}{routeSelectionMode&&<View style={styles.routeSelectionHint}><Text style={styles.routeSelectionHintText}>{routeSelection.length?`Toque nas entregas na ordem da rota · ${routeSelection.length} selecionada(s)`:'Toque nas entregas na ordem em que devem ser feitas.'}</Text></View>}{routeSelection.length>0&&<Pressable style={styles.syncButton} onPress={createAndStartRoute}><Text style={styles.primaryButtonText}>Iniciar rota · {routeSelection.length} parada(s)</Text></Pressable>}</>}
               {operations().length > 0 && <Text style={styles.pendingText}>{operations().length} operação(ões) aguardando envio</Text>}
               {failedOperations().length > 0 && <Pressable style={styles.errorCard} onPress={() => {
@@ -756,13 +782,7 @@ export default function Home() {
 
           {activeTab === 'settings' && <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
             <View style={styles.settingsIntro}><View style={styles.settingsIcon}><Icon name="settings" color={brand.petroleum} size={23}/></View><View style={{flex:1}}><Text style={styles.sectionTitle}>Ajustes do aplicativo</Text><Text style={styles.meta}>Conexão e funcionamento da sua conta.</Text></View></View>
-            <View style={styles.sectionCard}>
-              <Text style={styles.sectionTitle}>Localização em tempo real</Text>
-              <Text style={styles.meta}>Compartilhe sua posição com a gestão mesmo sem iniciar uma rota.</Text>
-              <Pressable style={[styles.locationToggle, liveLocationEnabled && styles.locationToggleOn]} onPress={() => setLocationConfirm(liveLocationEnabled ? 'disable' : 'enable')} disabled={locationBusy} accessibilityRole="switch" accessibilityState={{ checked: liveLocationEnabled, disabled: locationBusy }}>
-                <View style={{flex:1}}><Text style={styles.settingsRowLabel}>{liveLocationEnabled ? 'Compartilhamento ativo' : 'Compartilhamento desligado'}</Text><Text style={styles.settingsFootnote}>{liveLocationEnabled ? 'A posição é atualizada em segundo plano.' : 'Ative somente durante o período de trabalho.'}</Text></View><Text style={[styles.settingsState, liveLocationEnabled && styles.settingsStateOn]}>{locationBusy ? 'Atualizando…' : liveLocationEnabled ? 'Ativo' : 'Desligado'}</Text>
-              </Pressable>
-            </View>
+            {shiftCard}
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>Conexão com a API</Text><Text style={styles.meta}>Endereço do serviço usado para sincronizar sua rota.</Text>
               {developerMode ? <><Text style={styles.fieldLabel}>URL da API</Text><TextInput style={styles.input} value={serverUrl} autoCapitalize="none" keyboardType="url" onChangeText={setServerUrl}/><Pressable style={styles.primaryButton} onPress={saveServerUrl} disabled={busy}><Text style={styles.primaryButtonText}>{busy ? 'Salvando…' : 'Salvar e sincronizar'}</Text></Pressable></> : <Text style={styles.meta}>A conexão é gerenciada automaticamente.</Text>}
@@ -806,8 +826,8 @@ export default function Home() {
       </View>
       <CalendarDialog visible={calendarOpen} value={deliveryDate} month={calendarMonth} onMonth={setCalendarMonth}
         onSelect={date => { setDeliveryDate(date); setCalendarOpen(false); }} onClose={() => setCalendarOpen(false)}/>
-      <ConfirmModal visible={locationConfirm !== null} title={locationConfirm === 'enable' ? 'Ativar localização em tempo real?' : 'Desativar localização em tempo real?'} message={locationConfirm === 'enable' ? 'Sua posição será compartilhada com a gestão enquanto este recurso estiver ativo, inclusive em segundo plano.' : 'A gestão deixará de receber novas posições assim que o compartilhamento for desativado.'} confirmLabel={locationConfirm === 'enable' ? 'Ativar' : 'Desativar'} destructive={locationConfirm === 'disable'} onCancel={() => setLocationConfirm(null)} onConfirm={() => void toggleLiveLocation(locationConfirm === 'enable')}/>
-      <ConfirmModal visible={locationConsentVersion !== null} title="Consentimento de localização" message="Ao aceitar, o Entrega Já compartilhará sua localização com a gestão durante o trabalho, inclusive quando o aplicativo estiver em segundo plano. Você pode desativar esse compartilhamento a qualquer momento em Configurações." confirmLabel="Aceitar e ativar" onCancel={() => setLocationConsentVersion(null)} onConfirm={() => void acceptLocationConsent()}/>
+      <ConfirmModal visible={locationConfirm !== null} title={locationConfirm === 'enable' ? 'Registrar entrada?' : 'Registrar saída?'} message={locationConfirm === 'enable' ? 'A gestão poderá acompanhar sua posição durante o expediente, inclusive com o aplicativo em segundo plano.' : 'A coleta de localização será interrompida agora, inclusive se houver uma rota aberta.'} confirmLabel={locationConfirm === 'enable' ? 'Registrar entrada' : 'Registrar saída'} destructive={locationConfirm === 'disable'} onCancel={() => setLocationConfirm(null)} onConfirm={() => void toggleLiveLocation(locationConfirm === 'enable')}/>
+      <ConfirmModal visible={locationConsentVersion !== null} title="Consentimento de localização" message="Ao aceitar, o Entrega Já compartilhará sua localização com a gestão durante o trabalho, inclusive quando o aplicativo estiver em segundo plano. Você pode desativar esse compartilhamento a qualquer momento em Configurações." confirmLabel="Aceitar e registrar entrada" onCancel={() => setLocationConsentVersion(null)} onConfirm={() => void acceptLocationConsent()}/>
     </SafeAreaView>
   );
 }

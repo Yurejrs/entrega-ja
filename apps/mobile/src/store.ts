@@ -7,7 +7,9 @@ const store = createStore(db, randomUUID);
 
 export const {
   deliveries,
-  getMeta,
+  getMeta, getShiftState, setShiftState,
+  cacheProofCount,
+  cacheRouteOverview,
   prepareAccount,
   enqueue,
   operations,

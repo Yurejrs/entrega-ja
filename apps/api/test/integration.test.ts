@@ -214,36 +214,47 @@ test('full API flow with real PostgreSQL roles', async () => {
     assert.equal(locationConsent.status,200,JSON.stringify(locationConsent.data));
     const sharingBefore = await call(app,'GET','/v1/mobile/location-sharing',undefined,courier);
     assert.equal(sharingBefore.data.enabled,false);
-    const sharingEnabled = await call(app,'PUT','/v1/mobile/location-sharing',{enabled:true},courier);
+    let shiftId=randomUUID();
+    const sharingEnabled = await call(app,'PUT','/v1/mobile/location-sharing',{enabled:true,shiftId},courier);
     assert.equal(sharingEnabled.status,200,JSON.stringify(sharingEnabled.data));
     const livePoint = {clientPointId:randomUUID(),latitude:-3.7321,longitude:-38.5269,accuracyM:12,capturedAt:new Date().toISOString()};
-    const liveLocation = await call(app,'POST','/v1/mobile/location-sharing/locations',{points:[livePoint]},courier);
+    const liveLocation = await call(app,'POST','/v1/mobile/location-sharing/locations',{shiftId,points:[livePoint]},courier);
     assert.equal(liveLocation.status,200,JSON.stringify(liveLocation.data));
     assert.equal(liveLocation.data.accepted,1);
     const sharingDashboard = await call(app,'GET','/v1/tenant/dashboard?period=day',undefined,admin);
     assert.ok(sharingDashboard.data.liveCouriers.some((row:{sharing_id:string;latitude:number}) => row.sharing_id===courierMembershipId && Number(row.latitude)===livePoint.latitude));
-    const sharingDisabled = await call(app,'PUT','/v1/mobile/location-sharing',{enabled:false},courier);
+    const sharingDisabled = await call(app,'PUT','/v1/mobile/location-sharing',{enabled:false,shiftId},courier);
     assert.equal(sharingDisabled.data.enabled,false);
     const startedRoute = await call(app,'POST',`/v1/mobile/routes/${route.data.id}/start`,{},courier);
     assert.equal(startedRoute.status,200,JSON.stringify(startedRoute.data));
     const courierRouteStatus = await call(app,'GET',`/v1/mobile/routes/${route.data.id}`,undefined,courier);
     assert.equal(courierRouteStatus.data.status,'active');
+    const overview = await call(app,'GET',`/v1/mobile/routes/${route.data.id}?include=stops`,undefined,courier);
+    assert.deepEqual(overview.data.stops.map((stop:{id:string})=>stop.id),[deliveryId,dueToday.data.id,future.data.id]);
+    assert.equal(overview.data.stops[0].customer,'Maria');
+    assert.equal(overview.data.stops[0].checked,false);
+    const offDuty=await call(app,'POST',`/v1/mobile/routes/${route.data.id}/locations`,{shiftId,points:[livePoint]},courier);
+    assert.equal(offDuty.status,409);
+    assert.equal((await call(app,'POST','/v1/mobile/location-sharing/locations',{shiftId,points:[livePoint]},courier)).status,409);
+    shiftId=randomUUID();
+    assert.equal((await call(app,'PUT','/v1/mobile/location-sharing',{enabled:true,shiftId},courier)).status,200);
+    assert.equal((await call(app,'POST','/v1/mobile/location-sharing/locations',{shiftId,points:[{...livePoint,capturedAt:new Date(Date.now()-60000).toISOString()}]},courier)).status,400);
     const routePoint = {clientPointId:randomUUID(),latitude:-3.7319,longitude:-38.5267,accuracyM:8,capturedAt:new Date().toISOString()};
-    const routeLocation = await call(app,'POST',`/v1/mobile/routes/${route.data.id}/locations`,{points:[routePoint]},courier);
+    const routeLocation = await call(app,'POST',`/v1/mobile/routes/${route.data.id}/locations`,{shiftId,points:[routePoint]},courier);
     assert.equal(routeLocation.status,200,JSON.stringify(routeLocation.data));
     assert.equal(routeLocation.data.accepted,1);
-    const routeLocationReplay = await call(app,'POST',`/v1/mobile/routes/${route.data.id}/locations`,{points:[routePoint]},courier);
+    const routeLocationReplay = await call(app,'POST',`/v1/mobile/routes/${route.data.id}/locations`,{shiftId,points:[routePoint]},courier);
     assert.equal(routeLocationReplay.status,200,JSON.stringify(routeLocationReplay.data));
     assert.equal(routeLocationReplay.data.accepted,0);
     const expiredRoutePointId=randomUUID();
     const expiredRoutePoint={...routePoint,clientPointId:expiredRoutePointId,capturedAt:new Date(Date.now()-31*24*60*60*1000).toISOString()};
-    const oldRouteLocation=await call(app,'POST',`/v1/mobile/routes/${route.data.id}/locations`,{points:[expiredRoutePoint]},courier);
+    const oldRouteLocation=await call(app,'POST',`/v1/mobile/routes/${route.data.id}/locations`,{shiftId,points:[expiredRoutePoint]},courier);
     assert.equal(oldRouteLocation.status,400,JSON.stringify(oldRouteLocation.data));
     const futureRoutePoint={...routePoint,clientPointId:randomUUID(),capturedAt:new Date(Date.now()+6*60*1000).toISOString()};
-    const futureRouteLocation=await call(app,'POST',`/v1/mobile/routes/${route.data.id}/locations`,{points:[futureRoutePoint]},courier);
+    const futureRouteLocation=await call(app,'POST',`/v1/mobile/routes/${route.data.id}/locations`,{shiftId,points:[futureRoutePoint]},courier);
     assert.equal(futureRouteLocation.status,400,JSON.stringify(futureRouteLocation.data));
     const impreciseRoutePoint={...routePoint,clientPointId:randomUUID(),accuracyM:250};
-    const impreciseRouteLocation=await call(app,'POST',`/v1/mobile/routes/${route.data.id}/locations`,{points:[impreciseRoutePoint]},courier);
+    const impreciseRouteLocation=await call(app,'POST',`/v1/mobile/routes/${route.data.id}/locations`,{shiftId,points:[impreciseRoutePoint]},courier);
     assert.equal(impreciseRouteLocation.status,200,JSON.stringify(impreciseRouteLocation.data));
     assert.equal(impreciseRouteLocation.data.lowPrecision,1);
     const liveRoute = await call(app,'GET',`/v1/tenant/routes/${route.data.id}/live`,undefined,admin);
@@ -270,6 +281,8 @@ test('full API flow with real PostgreSQL roles', async () => {
     const checkInBody = {clientOperationId:op,latitude:-3.7319,longitude:-38.5267,accuracyM:10,occurredAt:new Date().toISOString()};
     const checkIn = await call(app,'POST',`/v1/deliveries/${deliveryId}/check-ins`,checkInBody,courier);
     assert.equal(checkIn.status,200,JSON.stringify(checkIn.data));
+    const checkedRoute = await call(app,'GET',`/v1/mobile/routes/${route.data.id}?include=stops`,undefined,courier);
+    assert.equal(checkedRoute.data.stops[0].checked,true);
     const syncAfterCheckIn = await call(app,'GET','/v1/mobile/sync',undefined,courier);
     const syncedCheckIn = syncAfterCheckIn.data.items.find((item: {id:string}) => item.id===deliveryId);
     assert.equal(Number(syncedCheckIn.last_check_in_latitude),checkInBody.latitude);
@@ -290,9 +303,36 @@ test('full API flow with real PostgreSQL roles', async () => {
       Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="photo"; filename="proof.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`),
       photo,Buffer.from(`\r\n--${boundary}--\r\n`),
     ]);
-    const completion = await app.inject({method:'POST',url:`/v1/deliveries/${deliveryId}/completion`,
-      headers:{...headers(courier),'content-type':`multipart/form-data; boundary=${boundary}`},payload:multipart});
+    const uploadHeaders={...headers(courier),'content-type':`multipart/form-data; boundary=${boundary}`};
+    const facadePath=`/v1/deliveries/${deliveryId}/facade`;
+    const facade=await call(app,'GET',facadePath,undefined,courier);
+    assert.equal(facade.data.capture,true,JSON.stringify(facade.data));
+    const facadePayload=Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="revision"\r\n\r\n${facade.data.revision}\r\n`),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="photo"; filename="home.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`),
+      photo,Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    const captured=await app.inject({method:'PUT',url:facadePath,headers:uploadHeaders,payload:facadePayload});
+    assert.equal(captured.statusCode,200,captured.body);
+    const laterFacade=()=>call(app,'GET',`/v1/deliveries/${future.data.id}/facade`,undefined,courier);
+    assert.equal((await laterFacade()).data.capture,false);
+    assert.match((await laterFacade()).data.image,/^data:image\/jpeg/);
+    const manageFacade=(action:string)=>call(app,'PATCH',`/v1/tenant/addresses/${address.data.id}/facade`,{action},admin);
+    assert.equal((await manageFacade('request')).status,200);
+    assert.equal((await laterFacade()).data.capture,true);
+    assert.ok((await laterFacade()).data.image);
+    assert.equal((await manageFacade('remove')).status,200);
+    assert.equal((await laterFacade()).data.image,null);
+    assert.equal((await laterFacade()).data.capture,true);
+    const reuseProof=Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="clientOperationId"\r\n\r\n${randomUUID()}\r\n--${boundary}\r\nContent-Disposition: form-data; name="occurredAt"\r\n\r\n${occurredAt}\r\n--${boundary}--\r\n`);
+    const finish=()=>app.inject({method:'POST',url:`/v1/deliveries/${deliveryId}/completion`,headers:uploadHeaders,payload:reuseProof});
+    assert.equal((await finish()).statusCode,409);
+    const proof=await app.inject({method:'POST',url:`/v1/deliveries/${deliveryId}/photos`,headers:uploadHeaders,payload:multipart});
+    assert.equal(proof.statusCode,200,proof.body);
+    const completion = await finish();
     assert.equal(completion.statusCode,200,completion.body);
+    const progressedRoute = await call(app,'GET',`/v1/mobile/routes/${route.data.id}?include=stops`,undefined,courier);
+    assert.deepEqual(progressedRoute.data.stops.map((stop:{status:string})=>stop.status),['completed','active','pending']);
     const advancedRoute = await call(app,'GET',`/v1/tenant/routes/${route.data.id}/live`,undefined,admin);
     assert.equal(advancedRoute.data.route.status,'active');
     assert.equal(advancedRoute.data.stops.find((stop:{delivery_id:string})=>stop.delivery_id===deliveryId).status,'completed');
@@ -301,8 +341,7 @@ test('full API flow with real PostgreSQL roles', async () => {
     assert.ok(finishedToday.data.items.some((row:{id:string})=>row.id===deliveryId));
     const stillOpenToday = await call(app,'GET',`/v1/deliveries?tab=open&day=${todayFortaleza}`,undefined,admin);
     assert.ok(!stillOpenToday.data.items.some((row:{id:string})=>row.id===deliveryId));
-    const completionReplay = await app.inject({method:'POST',url:`/v1/deliveries/${deliveryId}/completion`,
-      headers:{...headers(courier),'content-type':`multipart/form-data; boundary=${boundary}`},payload:multipart});
+    const completionReplay = await finish();
     assert.equal(completionReplay.statusCode,200,completionReplay.body);
     assert.equal(completionReplay.json().replayed,true);
     const detail = await call(app,'GET',`/v1/deliveries/${deliveryId}`,undefined,admin);

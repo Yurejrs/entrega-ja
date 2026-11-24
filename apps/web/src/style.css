@@ -42,3 +42,9 @@
   .editor.delivery-editor-modal .fields{grid-template-columns:minmax(0,1fr)}
   .editor.delivery-editor-modal button[type=submit]{position:static}
 }
+
+.customer-addresses { margin-block: 1.5rem; padding-block-start: 1rem; border-block-start: 1px solid var(--border); }
+.customer-addresses .entry-heading, .customer-address { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .75rem; }
+.customer-address { padding-block: 1rem; border-block-end: 1px solid var(--border); overflow-wrap: anywhere; }
+.customer-address > div { flex: 1 1 12rem; }
+.customer-link { background: transparent; color: inherit; padding: 0; min-height: auto; border: 0; box-shadow: none; text-align: start; text-decoration: underline; text-underline-offset: .2em; }

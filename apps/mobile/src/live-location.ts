@@ -2,89 +2,76 @@ import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import * as SecureStore from 'expo-secure-store';
 import { randomUUID } from 'expo-crypto';
-import { configuredBaseUrl } from './api';
-import { liveLocationPoints, queueLivePoint, removeLiveLocationPoints, discardLiveLocationPoints } from './store';
-import { drainRoutePoints, retryAsync } from './route-sync-core';
+import { request } from './api';
+import { liveLocationPoints, queueLivePoint, removeLiveLocationPoints, discardLiveLocationPoints, discardRoutePoints } from './store';
+import { drainRoutePoints } from './route-sync-core';
+import { sendRouteLocations, stopLegacyRouteGPS } from './route-tracking';
+import { activeShift, currentShift, markOpening, saveShift, syncExit } from './work-shift';
 
-const TASK = 'entregaja-live-location';
-let flushing: Promise<void> | null = null;
+const TASK='entregaja-live-location';
+let flushing:Promise<void>|null=null;
 
-async function send(locations: Location.LocationObject[]) {
-  for (const location of locations) queueLivePoint({
-    clientPointId: randomUUID(), latitude: location.coords.latitude, longitude: location.coords.longitude,
-    accuracyM: location.coords.accuracy ?? 0, capturedAt: new Date(location.timestamp).toISOString(),
-  });
-  await flushLiveLocations();
+async function startGPS() {
+  if(await Location.hasStartedLocationUpdatesAsync(TASK))return;
+  if(!activeShift())return;
+  await Location.startLocationUpdatesAsync(TASK,{accuracy:Location.Accuracy.Balanced,timeInterval:15000,distanceInterval:25,
+    pausesUpdatesAutomatically:false,showsBackgroundLocationIndicator:true,foregroundService:{
+      notificationTitle:'Turno em andamento',notificationBody:'Sua localização é compartilhada até você registrar a saída.',notificationColor:'#0F4C5C'}});
+}
+async function stopGPS() {
+  if(await Location.hasStartedLocationUpdatesAsync(TASK))await Location.stopLocationUpdatesAsync(TASK);
+}
+async function flushLiveLocations(id:string) {
+  if(flushing)return flushing;
+  flushing=drainRoutePoints(()=>activeShift()?.id===id?liveLocationPoints():[],async batch=>{
+    const result=await request<{confirmedClientPointIds:string[]}>('/mobile/location-sharing/locations',{
+      method:'POST',body:JSON.stringify({shiftId:id,points:batch.map(row=>JSON.parse(row.payload))})});
+    return new Set(result.confirmedClientPointIds);
+  },removeLiveLocationPoints).then(()=>{});
+  try {await flushing;} finally {flushing=null;}
 }
 
-export async function flushLiveLocations() {
-  if (flushing) return flushing;
-  flushing = (async () => {
-    const token = await SecureStore.getItemAsync('session');
-    if (!token) return;
-    const base = await configuredBaseUrl();
-    await drainRoutePoints(
-      () => liveLocationPoints(),
-      async batch => retryAsync(async () => {
-        const response = await fetch(`${base}/v1/mobile/location-sharing/locations`, {
-          method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ points: batch.map(row => JSON.parse(row.payload)) }),
-        });
-        if (!response.ok) throw new Error(response.status >= 400 && response.status < 500 && response.status !== 429
-          ? `GPS rejeitado (${response.status})` : 'GPS pendente de sincronização');
-        const body = await response.json() as { confirmedClientPointIds?: string[] };
-        return new Set(body.confirmedClientPointIds ?? []);
-      }),
-      ids => removeLiveLocationPoints(ids),
-    );
-  })();
-  try { await flushing; } finally { flushing = null; }
-}
-
-TaskManager.defineTask(TASK, async ({ data, error }) => {
-  if (error || !data) return;
-  const enabled = await SecureStore.getItemAsync('liveLocationEnabled');
-  if (enabled !== 'true') return;
-  const locations = (data as { locations: Location.LocationObject[] }).locations;
-  try { await send(locations); } catch { /* preserved in the local queue for the next run */ }
+TaskManager.defineTask(TASK,async({data,error})=>{
+  const shift=activeShift();
+  if(!shift){await stopGPS();return;}
+  if(error||!data)return;
+  const routeId=await SecureStore.getItemAsync('activeRouteId');
+  if(activeShift()?.id!==shift.id)return;
+  const locations=(data as {locations:Location.LocationObject[]}).locations.filter(l=>l.timestamp>=Date.parse(shift.startedAt));
+  for(const l of locations)queueLivePoint({clientPointId:randomUUID(),latitude:l.coords.latitude,longitude:l.coords.longitude,
+    accuracyM:l.coords.accuracy??0,capturedAt:new Date(l.timestamp).toISOString()});
+  const [sent]=await Promise.allSettled([flushLiveLocations(shift.id),routeId?sendRouteLocations(routeId,locations,shift.id):undefined]);
+  if(sent.status==='rejected' && [401,409].includes(sent.reason?.status) && activeShift()?.id===shift.id)await stopLiveLocation();
 });
 
 export async function startLiveLocation() {
-  const foreground = await Location.requestForegroundPermissionsAsync();
-  if (!foreground.granted) throw new Error('Permita o acesso à localização para ativar o compartilhamento.');
-  const background = await Location.requestBackgroundPermissionsAsync();
-  if (!background.granted) throw new Error('Permita a localização em segundo plano para manter o compartilhamento ativo.');
-  const token = await SecureStore.getItemAsync('session');
-  if (!token) throw new Error('Sessão expirada.');
-  const base = await configuredBaseUrl();
-  const response = await fetch(`${base}/v1/mobile/location-sharing`, { method: 'PUT', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: true }) });
-  if (!response.ok) throw new Error((await response.json().catch(() => ({})) as { message?: string }).message ?? 'Não foi possível ativar o compartilhamento.');
-  await SecureStore.setItemAsync('liveLocationEnabled', 'true');
+  await syncExit();
+  if(activeShift())return startGPS();
+  if(!(await Location.requestForegroundPermissionsAsync()).granted)throw new Error('Permita a localização para registrar a entrada.');
+  if(!(await Location.requestBackgroundPermissionsAsync()).granted)throw new Error('Permita a localização em segundo plano durante o turno.');
+  const id=randomUUID();
+  // Persist a compensating exit before contacting the server in case the reply is lost.
+  const now=new Date().toISOString();
+  markOpening(id);
+  saveShift({id,startedAt:now,stoppedAt:now});
   try {
-    if (!await Location.hasStartedLocationUpdatesAsync(TASK)) await Location.startLocationUpdatesAsync(TASK, {
-      accuracy: Location.Accuracy.Balanced, timeInterval: 15000, distanceInterval: 25,
-      pausesUpdatesAutomatically: false, showsBackgroundLocationIndicator: true,
-      foregroundService: { notificationTitle: 'Localização compartilhada', notificationBody: 'O Entrega Já está atualizando sua posição para a gestão.', notificationColor: '#0F4C5C' },
-    });
-  } catch (error) {
-    await SecureStore.deleteItemAsync('liveLocationEnabled');
-    await fetch(`${base}/v1/mobile/location-sharing`, { method: 'PUT', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: false }) }).catch(() => {});
-    throw error;
-  }
+    const result=await request<{startedAt:string}>('/mobile/location-sharing',{method:'PUT',body:JSON.stringify({enabled:true,shiftId:id})});
+    discardLiveLocationPoints();
+    saveShift({id,startedAt:result.startedAt});
+    await startGPS();
+  } catch(error){markOpening(null);await stopLiveLocation();throw error;}
+  finally {markOpening(null);}
 }
-
 export async function stopLiveLocation() {
-  const token = await SecureStore.getItemAsync('session');
-  const base = await configuredBaseUrl();
-  if (await Location.hasStartedLocationUpdatesAsync(TASK)) await Location.stopLocationUpdatesAsync(TASK);
-  await SecureStore.deleteItemAsync('liveLocationEnabled');
+  const shift=currentShift();
+  if(shift&&!shift.stoppedAt)saveShift({...shift,stoppedAt:new Date().toISOString()});
   discardLiveLocationPoints();
-  if (token) await fetch(`${base}/v1/mobile/location-sharing`, { method: 'PUT', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: false }) }).catch(() => {});
+  const route=await SecureStore.getItemAsync('activeRouteId');
+  if(route)discardRoutePoints(route);
+  await Promise.allSettled([stopGPS(),stopLegacyRouteGPS(),syncExit()]);
 }
-
 export async function resumeLiveLocation() {
-  if (await SecureStore.getItemAsync('liveLocationEnabled') !== 'true') return;
-  if (!await Location.hasStartedLocationUpdatesAsync(TASK)) {
-    await Location.startLocationUpdatesAsync(TASK, { accuracy: Location.Accuracy.Balanced, timeInterval: 15000, distanceInterval: 25, pausesUpdatesAutomatically: false, showsBackgroundLocationIndicator: true, foregroundService: { notificationTitle: 'Localização compartilhada', notificationBody: 'O Entrega Já está atualizando sua posição para a gestão.', notificationColor: '#0F4C5C' } });
-  }
+  await stopLegacyRouteGPS();
+  if(activeShift())await startGPS();
+  else {await stopGPS();await syncExit();}
 }

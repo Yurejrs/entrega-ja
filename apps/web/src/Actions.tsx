@@ -398,7 +398,114 @@ const editable:Record<string,Editable>={
  plans:{path:'/platform/plans',fields:[{key:'name',column:'name',label:'Nome'},{key:'maxCouriers',column:'max_couriers',label:'Entregadores',type:'number'},{key:'maxUsers',column:'max_users',label:'Usuários',type:'number'},{key:'maxMonthlyDeliveries',column:'max_monthly_deliveries',label:'Entregas por mês',type:'number'},{key:'maxStorageBytes',column:'max_storage_bytes',label:'Armazenamento',type:'number'}]},
  subscriptions:{path:'/platform/subscriptions',fields:[],status:{path:'status',values:['active','suspended','ended'],column:'status'}}
 };
-export function ManageRecord({section,row,onClose,refresh}:{section:string;row:Row;onClose:()=>void;refresh:()=>void}){const config=editable[section];const[error,setError]=useState(''),[message,setMessage]=useState('');if(!config)return null;const id=String(row.membership_id??row.id);async function save(e:FormEvent<HTMLFormElement>){e.preventDefault();setError('');const form=new FormData(e.currentTarget);const body:Row={};for(const field of config.fields){const value=String(form.get(field.key)??'');if(value!==String(row[field.column]??''))body[field.key]=value===''?null:field.type==='number'?Number(value):value}if(!Object.keys(body).length)return;try{if(section==='users')await api(`${config.path}/${id}/profile`,{method:'PATCH',body:JSON.stringify({fullName:body.fullName})});else await api(`${config.path}/${id}`,{method:'PATCH',body:JSON.stringify(body)});setMessage('Alterações salvas.');refresh()}catch(e){setError((e as Error).message)}}async function status(value:string){try{await api(`${config.path}/${id}/${config.status!.path}`,{method:'PATCH',body:JSON.stringify({status:value})});setMessage('Situação atualizada.');refresh()}catch(e){setError((e as Error).message)}}async function resetPassword(){try{const result=await api<Row>(`${config.path}/${String(row.user_id)}/password-reset`,{method:'POST'});setMessage(`Link de redefinição: ${inviteLink(String(result.token))}`)}catch(e){setError((e as Error).message)}}async function archive(){try{await api(`${config.path}/${id}`,{method:'PATCH',body:JSON.stringify({archived:true})});setMessage('Registro arquivado.');refresh()}catch(e){setError((e as Error).message)}}return <section className="detail"><button onClick={onClose}>← Voltar</button><h2>{String(row.name??row.full_name??row.email??row.id)}</h2>{config.fields.length>0&&<form onSubmit={save}><div className="fields">{config.fields.map(field=><label key={field.key}>{field.label}<input name={field.key} type={field.type??'text'} defaultValue={String(row[field.column]??'')}/></label>)}</div><button>Salvar alterações</button></form>}{section==='addresses'&&<AddressLocation id={id} row={row} refresh={refresh}/ >}{config.status&&<div className="status-actions"><span>Situação: {String(row[config.status.column])}</span>{config.status.values.map(value=><button key={value} onClick={()=>status(value)} disabled={row[config.status!.column]===value}>{value}</button>)}</div>}{section==='users'&&<button onClick={resetPassword}>Gerar link de redefinição de senha</button>}{['customers','addresses','delivery-items'].includes(section)&&<button className="danger" onClick={archive}>Arquivar</button>}{error&&<div className="alert">{error}</div>}{message&&<div className="notice">{message}</div>}</section>}
+export function ManageRecord({section,row,onClose,refresh}:{section:string;row:Row;onClose:()=>void;refresh:()=>void}){const config=editable[section];const[error,setError]=useState(''),[message,setMessage]=useState('');if(!config)return null;const id=String(row.membership_id??row.id);async function save(e:FormEvent<HTMLFormElement>){e.preventDefault();setError('');const form=new FormData(e.currentTarget);const body:Row={};for(const field of config.fields){const value=String(form.get(field.key)??'');if(value!==String(row[field.column]??''))body[field.key]=value===''?null:field.type==='number'?Number(value):value}if(!Object.keys(body).length)return;try{if(section==='users')await api(`${config.path}/${id}/profile`,{method:'PATCH',body:JSON.stringify({fullName:body.fullName})});else await api(`${config.path}/${id}`,{method:'PATCH',body:JSON.stringify(body)});setMessage('Alterações salvas.');refresh()}catch(e){setError((e as Error).message)}}async function status(value:string){try{await api(`${config.path}/${id}/${config.status!.path}`,{method:'PATCH',body:JSON.stringify({status:value})});setMessage('Situação atualizada.');refresh()}catch(e){setError((e as Error).message)}}async function resetPassword(){try{const result=await api<Row>(`${config.path}/${String(row.user_id)}/password-reset`,{method:'POST'});setMessage(`Link de redefinição: ${inviteLink(String(result.token))}`)}catch(e){setError((e as Error).message)}}async function archive(){try{await api(`${config.path}/${id}`,{method:'PATCH',body:JSON.stringify({archived:true})});setMessage('Registro arquivado.');refresh()}catch(e){setError((e as Error).message)}}return <section className="detail"><button onClick={onClose}>← Voltar</button><h2>{String(row.name??row.full_name??row.email??row.id)}</h2>{config.fields.length>0&&<form onSubmit={save}><div className="fields">{config.fields.map(field=><label key={field.key}>{field.label}<input name={field.key} type={field.type??'text'} defaultValue={String(row[field.column]??'')}/></label>)}</div><button>Salvar alterações</button></form>}{section==='customers'&&<CustomerAddresses key={id} customerId={id}/>} {section==='addresses'&&<><AddressFacade key={id} id={id}/><AddressLocation id={id} row={row} refresh={refresh}/></>}{config.status&&<div className="status-actions"><span>Situação: {String(row[config.status.column])}</span>{config.status.values.map(value=><button key={value} onClick={()=>status(value)} disabled={row[config.status!.column]===value}>{value}</button>)}</div>}{section==='users'&&<button onClick={resetPassword}>Gerar link de redefinição de senha</button>}{['customers','addresses','delivery-items'].includes(section)&&<button className="danger" onClick={archive}>Arquivar</button>}{error&&<div className="alert">{error}</div>}{message&&<div className="notice">{message}</div>}</section>}
+
+function CustomerAddresses({customerId}:{customerId:string}) {
+  const [rows,setRows]=useState<Row[]|null>(null);
+  const [revision,setRevision]=useState(0);
+  const [draft,setDraft]=useState<Row|null>(null);
+  const [busy,setBusy]=useState(false);
+  const [loadError,setLoadError]=useState('');
+  const [error,setError]=useState('');
+  const [message,setMessage]=useState('');
+  const fields=editable.addresses.fields;
+  useEffect(()=>{
+    let current=true;
+    setLoadError('');
+    loadChoiceItems('/tenant/addresses?customerId='+encodeURIComponent(customerId))
+      .then(items=>{if(current)setRows(items);})
+      .catch(e=>{if(current)setLoadError(e.message);});
+    return ()=>{current=false;};
+  },[customerId,revision]);
+
+  function open(address:Row|null) {
+    setDraft(address);
+    setError('');
+    setMessage('');
+  }
+  async function save(event:FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if(!draft || busy)return;
+    const data=new FormData(event.currentTarget);
+    const body:Row=draft.id ? {} : {customerId};
+    for(const field of fields) {
+      let value=String(data.get(field.key)??'').trim();
+      if(field.key==='state')value=value.toUpperCase();
+      if(value!==String(draft[field.column]??''))body[field.key]=value||null;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      if(Object.keys(body).length) {
+        const url=draft.id ? '/tenant/addresses/'+draft.id : '/tenant/addresses';
+        const saved=await api<Row>(url,{method:draft.id?'PATCH':'POST',body:JSON.stringify(body)});
+        setRows(current=>[saved,...(current??[]).filter(row=>row.id!==saved.id)]);
+        setRevision(r=>r+1);
+      }
+      setMessage(draft.id?'Endereço atualizado.':'Endereço cadastrado.');
+      setDraft(null);
+    } catch(e){setError((e as Error).message);}
+    finally{setBusy(false);}
+  }
+  return <section className="customer-addresses">
+    <div className="entry-heading"><h3>Endereços do cliente</h3>
+      {!draft && <button type="button" onClick={()=>open({})}>Novo endereço</button>}</div>
+    {message && <p role="status">{message}</p>}
+    {loadError && <div role="alert">{loadError} <button type="button" onClick={()=>setRevision(r=>r+1)}>Tentar novamente</button></div>}
+    {draft ? <div key={String(draft.id??'new')}>
+      <h4>{draft.id?'Editar endereço':'Novo endereço'}</h4>
+      <form onSubmit={save}><AddressLookup/><div className="fields">{fields.map(field=>field.key==='street'
+        ? <StreetField key={field.key} name="street" initialStreet={String(draft.street??'')}/>
+        : <label key={field.key}>{field.label}<input name={field.key} defaultValue={String(draft[field.column]??'')}
+          required={field.key==='city'||field.key==='state'} pattern={field.key==='state'?'[A-Za-z]{2}':undefined}
+          maxLength={field.key==='state'?2:undefined}/></label>)}</div>
+        {error && <p role="alert">{error}</p>}
+        <div className="status-actions"><button disabled={busy}>{busy?'Salvando…':'Salvar endereço'}</button>
+          <button type="button" className="secondary-action" disabled={busy} onClick={()=>open(null)}>Cancelar</button></div>
+      </form>
+      {!!draft.id && <><AddressFacade id={String(draft.id)}/><AddressLocation id={String(draft.id)} row={draft} refresh={()=>setRevision(r=>r+1)}/></>}
+    </div> : <>
+      {!rows && !loadError && <p role="status">Carregando endereços…</p>}
+      {rows?.length===0 && <p>Nenhum endereço cadastrado para este cliente.</p>}
+      {rows?.map(row=><div className="customer-address" key={String(row.id)}><div>
+        <strong>{String(row.label||row.street)}{row.archived_at?' · Arquivado':''}</strong>
+        <div>{[row.street,row.number,row.complement].filter(Boolean).join(', ')}</div>
+        <div>{[row.neighborhood,[row.city,row.state].filter(Boolean).join(' – '),row.postal_code].filter(Boolean).join(' · ')}</div>
+      </div><button type="button" className="secondary-action" aria-label={'Editar endereço '+String(row.label||row.street)} onClick={()=>open(row)}>Editar</button></div>)}
+    </>}
+  </section>;
+}
+
+function AddressFacade({id}:{id:string}) {
+  const path='/tenant/addresses/'+id+'/facade';
+  const [photo,setPhoto]=useState<{image:string|null;requested:boolean}|null>(null);
+  const [error,setError]=useState('');
+  const [busy,setBusy]=useState(false);
+  const [reload,setReload]=useState(0);
+  useEffect(()=>{
+    let current=true;
+    api<{image:string|null;requested:boolean}>(path).then(value=>{if(current){setPhoto(value);setError('');}})
+      .catch(e=>{if(current)setError(e.message);});
+    return ()=>{current=false;};
+  },[path,reload]);
+  async function change(action:'request'|'remove') {
+    if (action==='remove' && !window.confirm('Apagar a foto da casa e solicitar outra na próxima entrega?')) return;
+    setBusy(true);
+    try {
+      await api(path,{method:'PATCH',body:JSON.stringify({action})});
+      setPhoto({image:action==='remove'?null:photo?.image??null,requested:true});
+      setError('');
+    } catch(e){setError((e as Error).message);}
+    finally{setBusy(false);}
+  }
+  return <section><h3>Foto da casa</h3>
+    {photo?.image && <img src={photo.image} alt="Fachada do endereço de entrega" style={{maxWidth:'100%',maxHeight:280}}/>}
+    {photo && <><p>{photo.requested?'Nova foto solicitada ao entregador.':photo.image?'Foto disponível para os entregadores.':'Este endereço ainda não tem foto.'}</p>
+      <button type="button" disabled={busy||photo.requested} onClick={()=>change('request')}>Solicitar foto da casa</button>
+      {photo.image && <button type="button" disabled={busy} onClick={()=>change('remove')}>Apagar foto</button>}</>}
+    {error && <p role="alert">{error} <button type="button" onClick={()=>setReload(n=>n+1)}>Tentar novamente</button></p>}
+  </section>;
+}
 
 function AddressLocation({id,row,refresh}:{id:string;row:Row;refresh:()=>void}){const[error,setError]=useState(''),[saved,setSaved]=useState(false);async function submit(event:FormEvent<HTMLFormElement>){event.preventDefault();const form=new FormData(event.currentTarget);const latitude=Number(form.get('latitude')),longitude=Number(form.get('longitude'));try{await api(`/tenant/addresses/${id}/location`,{method:'PATCH',body:JSON.stringify({latitude,longitude})});setSaved(true);setError('');refresh()}catch(e){setError((e as Error).message)}}return <div className="location-editor"><h3>Localização do mapa</h3><p>Informe as coordenadas de referência para exibir a prévia no app do entregador.</p><form onSubmit={submit}><label>Latitude<input name="latitude" type="number" step="0.000001" min="-90" max="90" required defaultValue={String(row.reference_latitude??'')}/></label><label>Longitude<input name="longitude" type="number" step="0.000001" min="-180" max="180" required defaultValue={String(row.reference_longitude??'')}/></label><button>Salvar coordenadas</button></form>{saved&&<div className="notice">Localização atualizada. A prévia aparecerá após sincronizar o app.</div>}{error&&<div className="alert">{error}</div>}</div>}
 

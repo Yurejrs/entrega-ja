@@ -223,7 +223,7 @@ export function registerTenantRoutes(app: FastifyInstance, pools: DbPools, confi
         JOIN app.tenant_memberships m ON m.id=s.courier_membership_id
         JOIN app.users u ON u.id=m.user_id
         LEFT JOIN LATERAL (SELECT latitude,longitude,received_at FROM app.courier_locations l
-          WHERE l.courier_membership_id=s.courier_membership_id AND l.accuracy_m<=$1 ORDER BY l.received_at DESC LIMIT 1) last ON true
+          WHERE l.courier_membership_id=s.courier_membership_id AND l.captured_at>=s.started_at AND l.accuracy_m<=$1 ORDER BY l.captured_at DESC LIMIT 1) last ON true
         WHERE s.status='active' ORDER BY u.full_name`,[config.gpsLowPrecisionThresholdM]);
       const summary = await client.query<{ day: string; week: string; month: string }>(`WITH clock AS (
           SELECT (now() AT TIME ZONE 'America/Fortaleza')::date AS today,
@@ -572,7 +572,7 @@ export function registerTenantRoutes(app: FastifyInstance, pools: DbPools, confi
           JOIN app.tenant_memberships m ON m.id=s.courier_membership_id
           JOIN app.users u ON u.id=m.user_id
           LEFT JOIN LATERAL (SELECT latitude,longitude,received_at FROM app.courier_locations l
-            WHERE l.courier_membership_id=s.courier_membership_id AND l.accuracy_m<=$1 ORDER BY l.received_at DESC LIMIT 1) last ON true
+            WHERE l.courier_membership_id=s.courier_membership_id AND l.captured_at>=s.started_at AND l.accuracy_m<=$1 ORDER BY l.captured_at DESC LIMIT 1) last ON true
           WHERE s.status='active' ORDER BY u.full_name`, [config.gpsLowPrecisionThresholdM])).rows);
         raw.write(`event: locations\ndata: ${JSON.stringify(data)}\n\n`);
       } catch { if (!closed) raw.write('event: error\ndata: {"message":"Não foi possível atualizar as localizações"}\n\n'); }
