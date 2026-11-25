@@ -3,7 +3,7 @@ import * as TaskManager from 'expo-task-manager';
 import * as SecureStore from 'expo-secure-store';
 import { randomUUID } from 'expo-crypto';
 import { activeShift } from './work-shift';
-import { configuredBaseUrl } from './api';
+import { configuredBaseUrl, request } from './api';
 import { queueRoutePoint, routePoints, removeRoutePoints, discardRoutePoints } from './store';
 import { drainRoutePoints, retryAsync } from './route-sync-core';
 
@@ -19,9 +19,9 @@ export async function sendRouteLocations(routeId:string,locations:Location.Locat
 export async function flushRoutePoints(routeId:string){
  const shift=activeShift();if(!shift)return;
  const current=flushes.get(routeId);if(current)return current;
- const run=(async()=>{const token=await SecureStore.getItemAsync('session');if(!token)return;const base=await configuredBaseUrl();await drainRoutePoints(
+ const run=(async()=>{const token=await SecureStore.getItemAsync('session');if(!token)return;await drainRoutePoints(
    ()=>activeShift()?.id===shift.id?routePoints(routeId).filter(row=>JSON.parse(row.payload).shiftId===shift.id):[],
-   async batch=>retryAsync(async()=>{if(activeShift()?.id!==shift.id)throw new Error('Turno encerrado.');const response=await fetch(`${base}/v1/mobile/routes/${routeId}/locations`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({shiftId:shift.id,points:batch.map(row=>{const {shiftId,...point}=JSON.parse(row.payload);return point;})})});if(!response.ok){if(response.status>=400&&response.status<500&&response.status!==429)throw new Error(`GPS rejeitado (${response.status})`);throw new Error('GPS pendente de sincronização');}const body=await response.json() as {confirmedClientPointIds?:string[]};return new Set(body.confirmedClientPointIds??[]);}),
+   async batch=>retryAsync(async()=>{if(activeShift()?.id!==shift.id)throw new Error('Turno encerrado.');const body=await request<{confirmedClientPointIds?:string[]}>(`/mobile/routes/${routeId}/locations`,{method:'POST',body:JSON.stringify({shiftId:shift.id,points:batch.map(row=>{const {shiftId,...point}=JSON.parse(row.payload);return point;})})});return new Set(body.confirmedClientPointIds??[]);}),
    ids=>removeRoutePoints(ids),
  );})();
  flushes.set(routeId,run);try{await run}finally{if(flushes.get(routeId)===run)flushes.delete(routeId)}

@@ -19,13 +19,13 @@ export function registerFacadeRoutes(app: FastifyInstance, pools: DbPools) {
       reply.header('Cache-Control','private, no-store');
       return withTenant(pools,identity,async client => {
         const result = await client.query(mobile
-          ? `SELECT f.image,f.revision,f.requested,(${activeDelivery} AND ${captureAllowed}) AS capture
+          ? `SELECT f.address_id,f.image,f.revision,f.requested,(${activeDelivery} AND ${captureAllowed}) AS capture
              FROM app.deliveries d JOIN app.address_facades f USING(tenant_id,address_id)
              WHERE d.id=$1 AND d.courier_membership_id=app.current_membership_id()`
-          : `SELECT f.image,f.revision,f.requested,false AS capture FROM app.addresses a
+          : `SELECT f.address_id,f.image,f.revision,f.requested,false AS capture FROM app.addresses a
              LEFT JOIN app.address_facades f ON f.address_id=a.id AND f.tenant_id=a.tenant_id WHERE a.id=$1`, [id]);
         const row = result.rows[0] ?? notFound();
-        return {image:row.image ? 'data:image/jpeg;base64,'+row.image.toString('base64') : null,
+        return {addressId:row.address_id,image:row.image ? 'data:image/jpeg;base64,'+row.image.toString('base64') : null,
           revision:row.revision, requested:!!row.requested, capture:!!row.capture};
       });
     });
@@ -47,7 +47,10 @@ export function registerFacadeRoutes(app: FastifyInstance, pools: DbPools) {
         FROM app.deliveries d WHERE d.id=$1 AND d.courier_membership_id=app.current_membership_id()
         AND d.address_id=f.address_id AND d.tenant_id=f.tenant_id AND f.revision::text=$3
         AND ${activeDelivery} AND ${captureAllowed} RETURNING f.revision`,[id,bytes,revision]);
-      return result.rows[0] ?? conflict('O endereço foi atualizado. Confira a foto atual.');
+      if(result.rows[0])return result.rows[0];
+      const previous=await client.query(`SELECT f.revision FROM app.address_facades f JOIN app.deliveries d USING(tenant_id,address_id)
+        WHERE d.id=$1 AND d.courier_membership_id=app.current_membership_id() AND f.image=$2 AND NOT f.requested`,[id,bytes]);
+      return previous.rows[0] ?? conflict('O endereço foi atualizado. Confira a foto atual.');
     });
   });
   app.patch(managerPath,{schema:{...schema,body:{type:'object',required:['action'],properties:{

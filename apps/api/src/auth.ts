@@ -89,7 +89,37 @@ export async function createInvite(client: PoolClient, input: { email: string; p
   return { token, ...result.rows[0]! };
 }
 
-export async function acceptInvite(pools: DbPools, token: string, password: string): Promise<void> {
+export async function inviteDetails(pools: DbPools, token: string): Promise<{ purpose: 'invite' | 'password_reset'; mfaRequired: boolean }> {
+  const result = await pools.auth.query<{ purpose: 'invite' | 'password_reset'; mfa_required: boolean }>(`SELECT i.purpose,
+    i.purpose='password_reset' AND EXISTS (
+      SELECT 1 FROM app.users u JOIN app.totp_factors f ON f.user_id=u.id
+      WHERE u.email=i.email AND f.enabled_at IS NOT NULL
+    ) AS mfa_required
+    FROM app.auth_invites i
+    WHERE i.token_hash=$1 AND i.consumed_at IS NULL AND i.expires_at>now()`, [sha256(token)]);
+  const invite = result.rows[0];
+  if (!invite) badRequest('Convite inválido ou expirado');
+  return { purpose: invite.purpose, mfaRequired: invite.mfa_required };
+}
+
+async function verifyPasswordResetMfa(client: PoolClient, userId: string, code: string | undefined, config: ApiConfig) {
+  const result = await client.query<{ encrypted_secret: string; enabled_at: Date | null; last_used_step: string | null }>(
+    'SELECT encrypted_secret,enabled_at,last_used_step FROM app.totp_factors WHERE user_id=$1 FOR UPDATE', [userId]);
+  const factor = result.rows[0];
+  if (!factor?.enabled_at) return;
+  if (!code) unauthorized();
+  const secret = decryptSecret(factor.encrypted_secret, config.mfaKey);
+  const step = verifyTotp(secret, code, factor.last_used_step ? Number(factor.last_used_step) : null);
+  if (step !== null) {
+    await client.query('UPDATE app.totp_factors SET last_used_step=$1 WHERE user_id=$2', [step, userId]);
+    return;
+  }
+  const recovery = await client.query(`UPDATE app.mfa_recovery_codes SET used_at=now()
+    WHERE user_id=$1 AND code_hash=$2 AND used_at IS NULL RETURNING code_hash`, [userId, sha256(code)]);
+  if (!recovery.rowCount) unauthorized();
+}
+
+export async function acceptInvite(pools: DbPools, token: string, password: string, mfaCode: string | undefined, config: ApiConfig): Promise<void> {
   if (password.length < 8 || password.length > 256) badRequest('A senha deve ter entre 8 e 256 caracteres');
   await inTransaction(pools.auth, async client => {
     const result = await client.query<{ id: string; email: string; purpose: string; tenant_id: string | null; tenant_role: string | null }>(
@@ -103,6 +133,7 @@ export async function acceptInvite(pools: DbPools, token: string, password: stri
     let userId = existing.rows[0]?.id;
     if (invite.purpose === 'password_reset') {
       if (!userId) badRequest('Conta não encontrada');
+      await verifyPasswordResetMfa(client, userId, mfaCode, config);
       await client.query('UPDATE app.users SET password_hash=$1,updated_at=now() WHERE id=$2', [hash, userId]);
       await client.query('UPDATE app.auth_sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL', [userId]);
     } else {

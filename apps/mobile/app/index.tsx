@@ -1,6 +1,7 @@
+import { AppAlert as Alert } from '../src/AppFeedback';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert, AppState, FlatList, Image, Linking, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View,
+   AppState, FlatList, Image, Linking, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View,
 } from 'react-native';
 import Svg, { Circle, Defs, LinearGradient, Path, Polygon, Rect, Stop } from 'react-native-svg';
 import { router, useFocusEffect } from 'expo-router';
@@ -22,7 +23,7 @@ import { deliveryStatusLabel } from '../src/status';
 import { accountKey } from '../src/account-key';
 import { cancelRouteTracking, resumeRouteTracking, startRouteTracking } from '../src/route-tracking';
 import { activeShift, currentShift, syncExit } from '../src/work-shift';
-import { resumeLiveLocation, startLiveLocation, stopLiveLocation } from '../src/live-location';
+import { resumeLiveLocation, startLiveLocation, stopLiveLocation, syncLocationPoints } from '../src/live-location';
 import { toggleRouteSelection } from '../src/route-selection';
 import { RouteOverview, seedRouteOverview } from '../src/RouteOverview';
 import { ConfirmModal, EmptyState, Icon, ProgressRing, StatusChip } from '../src/design-system';
@@ -329,7 +330,20 @@ export default function Home() {
   useEffect(()=>{
     if(!authed)return;
     setLiveLocationEnabled(!!activeShift());
-    void resumeLiveLocation().catch(()=>{});
+    let resumeTimer:ReturnType<typeof setTimeout>|null=null;
+    const scheduleResume=()=>{
+      if(AppState.currentState!=='active')return;
+      if(resumeTimer)clearTimeout(resumeTimer);
+      resumeTimer=setTimeout(()=>{
+        if(AppState.currentState==='active')void resumeLiveLocation().catch(error=>console.warn('Não foi possível retomar o GPS do expediente.',error));
+      },1000);
+    };
+    scheduleResume();
+    const subscription=AppState.addEventListener('change',state=>{
+      if(state==='active')scheduleResume();
+      else if(resumeTimer){clearTimeout(resumeTimer);resumeTimer=null;}
+    });
+    return()=>{if(resumeTimer)clearTimeout(resumeTimer);subscription.remove();};
   },[authed]);
 
   useFocusEffect(useCallback(() => {
@@ -393,6 +407,7 @@ export default function Home() {
     try {
       if(currentShift()?.stoppedAt && !locationBusy)await syncExit().catch(()=>{});
       await resumeRouteTracking().catch(()=>{});
+      await syncLocationPoints().catch(()=>{});
       setActiveRouteId(await SecureStore.getItemAsync('activeRouteId'));
       await flushOperations();
       setItems(await syncDeliveries());
@@ -508,7 +523,7 @@ export default function Home() {
   async function claimDelivery(id:string){try{await request(`/deliveries/${id}/claim`,{method:'POST',body:'{}'});setDeliveryTab('open');await refresh();Alert.alert('Entrega aceita','A entrega agora está na sua lista.')}catch(error){Alert.alert('Entrega indisponível',userFacingError(error,'Não foi possível aceitar esta entrega.'));request<{items:Delivery[]}>('/mobile/available').then(result=>setAvailableDeliveries(result.items)).catch(()=>{});}}
   async function ensureLocationConsent(){const consent=await request<{accepted:boolean;policyVersion:string}>('/mobile/location-consent');if(consent.accepted)return;await new Promise<void>((resolve,reject)=>Alert.alert('Localização durante a rota','O GPS da rota funciona entre a entrada e a saída no ponto de trabalho.',[{text:'Agora não',style:'cancel',onPress:()=>reject(new Error('Aceite a política de localização para iniciar a rota.'))},{text:'Aceitar e continuar',onPress:()=>{request('/mobile/location-consent',{method:'POST',body:JSON.stringify({policyVersion:consent.policyVersion})}).then(()=>resolve()).catch(reject)}}]));}
   async function createAndStartRoute(){try{await ensureLocationConsent();const result=await request<{id:string}>('/mobile/routes',{method:'POST',body:JSON.stringify({deliveryIds:routeSelection})});await startRouteTracking(result.id);seedRouteOverview(result.id,routeSelection,items);setActiveRouteId(result.id);setRouteSelection([]);setRouteSelectionMode(false);}catch(error){Alert.alert('Não foi possível iniciar a rota',userFacingError(error,'Tente novamente em instantes.'))}}
-  function cancelCurrentRoute(){if(!activeRouteId)return;Alert.alert('Cancelar rota?','O acompanhamento GPS será encerrado e as paradas restantes serão canceladas.',[{text:'Voltar',style:'cancel'},{text:'Cancelar rota',style:'destructive',onPress:async()=>{try{await cancelRouteTracking();setActiveRouteId(null);await refresh();Alert.alert('Rota cancelada','O acompanhamento GPS foi encerrado.')}catch(error){Alert.alert('Não foi possível cancelar',userFacingError(error,'Mantenha a internet ativa e tente novamente.'))}}}]);}
+  function cancelCurrentRoute(){if(!activeRouteId)return;Alert.alert('Cancelar rota?','A montagem da rota será encerrada. As entregas continuarão disponíveis e o ponto de trabalho seguirá controlando a localização.',[{text:'Voltar',style:'cancel'},{text:'Cancelar rota',style:'destructive',onPress:async()=>{try{await cancelRouteTracking();setActiveRouteId(null);await refresh();Alert.alert('Rota cancelada','A rota foi encerrada. Registre a saída no ponto ao terminar o expediente.')}catch(error){Alert.alert('Não foi possível cancelar',userFacingError(error,'Mantenha a internet ativa e tente novamente.'))}}}]);}
 
   async function chooseProfileImage(kind: 'photo' | 'cover') {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -630,7 +645,7 @@ export default function Home() {
 
   if (!authed) return (
     <SafeAreaView style={styles.safePage} edges={['top', 'bottom']}>
-      <View style={styles.login}>
+      <ScrollView contentContainerStyle={[styles.login,{flexGrow:1}]} keyboardShouldPersistTaps="handled">
         <Logo />
         <Text style={styles.title}>Área do entregador</Text>
         <TextInput style={styles.input} placeholder="E-mail" autoCapitalize="none" keyboardType="email-address" value={email} onChangeText={setEmail}/>
@@ -640,7 +655,7 @@ export default function Home() {
         <Text style={styles.loginHint}>Para testes remotos, use o IP Tailscale da máquina que executa a API.</Text>
         <Pressable onPress={tapVersion} accessibilityRole="button"><Text style={styles.loginVersion}>Entrega Já {Constants.expoConfig?.version ?? 'Android'}</Text></Pressable>
         <Pressable style={styles.primaryButton} onPress={enter} disabled={busy}><Text style={styles.primaryButtonText}>{busy ? 'Entrando…' : 'Entrar'}</Text></Pressable>
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 
@@ -711,7 +726,7 @@ export default function Home() {
               {operations().length > 0 && <Text style={styles.pendingText}>{operations().length} operação(ões) aguardando envio</Text>}
               {failedOperations().length > 0 && <Pressable style={styles.errorCard} onPress={() => {
                 const failed = failedOperations();
-                const summary = failed.slice(0, 3).map(operation => `${operation.kind === 'completion' ? 'Conclusão' : operation.kind === 'check_in' ? 'Check-in' : 'Problema'}: ${operation.error ?? 'Não enviada'}`).join('\n');
+                const summary = failed.slice(0, 3).map(operation => `${operation.kind === 'completion' ? 'Conclusão' : operation.kind === 'check_in' ? 'Check-in' : operation.kind === 'facade' ? 'Foto da casa' : operation.kind === 'photo' ? 'Foto da entrega' : operation.kind === 'note' ? 'Observação' : 'Problema'}: ${operation.error ?? 'Não enviada'}`).join('\n');
                 Alert.alert('Operações para revisar', `${summary}${failed.length > 3 ? '\n…' : ''}`, [
                   { text: 'Fechar' },
                   { text: 'Tentar novamente', onPress: async () => { for (const operation of failed) retryFailed(operation.id); await flushOperations().catch(() => {}); setItems(deliveries()); } },
@@ -803,7 +818,7 @@ export default function Home() {
             </View>
             {failedOperations().length > 0 && <Pressable style={styles.errorCard} onPress={() => {
               const failed = failedOperations();
-              const summary = failed.slice(0, 3).map(operation => `${operation.kind === 'completion' ? 'Conclusão' : operation.kind === 'check_in' ? 'Check-in' : 'Problema'}: ${operation.error ?? 'Não enviada'}`).join('\n');
+              const summary = failed.slice(0, 3).map(operation => `${operation.kind === 'completion' ? 'Conclusão' : operation.kind === 'check_in' ? 'Check-in' : operation.kind === 'facade' ? 'Foto da casa' : operation.kind === 'photo' ? 'Foto da entrega' : operation.kind === 'note' ? 'Observação' : 'Problema'}: ${operation.error ?? 'Não enviada'}`).join('\n');
               Alert.alert('Operações para revisar', `${summary}${failed.length > 3 ? '\n…' : ''}`, [
                 { text: 'Fechar' },
                 { text: 'Tentar novamente', onPress: async () => { for (const operation of failed) retryFailed(operation.id); await flushOperations().catch(() => {}); setItems(deliveries()); } },

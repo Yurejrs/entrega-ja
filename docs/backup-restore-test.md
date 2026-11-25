@@ -18,3 +18,9 @@ O backup precisa preservar o PostgreSQL e o armazenamento privado de fotos como 
 ## Evidência local
 
 Em 22/11/2026, o procedimento foi executado contra o PostgreSQL de teste e um banco temporário. Os dois hashes passaram; 10 arquivos privados foram extraídos; o banco restaurado apresentou 34 migrações, 68 usuários e 114 entregas. Essa evidência valida o procedimento local, mas não substitui a repetição com as credenciais, volume de fotos e infraestrutura do piloto.
+
+## Verificação de 24/11/2026
+
+Os scripts atuais foram executados com os clientes PostgreSQL 17 do contêiner de testes, em um banco de recuperação separado. Os dois hashes passaram, 42 migrações foram restauradas e a permissão SELECT de app_runtime sobre app.deliveries foi preservada. Um arquivo privado sintético foi recuperado e comparado byte a byte com a origem.
+
+O ensaio cobriu dump, permissões e extração. A validação com o acervo real de fotos, credenciais de produção, login/MFA e infraestrutura de destino continua prevista no roteiro de recuperação. Consulte [backup-restauracao.md](backup-restauracao.md).

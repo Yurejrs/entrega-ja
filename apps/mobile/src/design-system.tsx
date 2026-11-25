@@ -57,7 +57,7 @@ const styles = StyleSheet.create({
   confirmCard: { backgroundColor: 'white', borderRadius: 20, padding: 20, gap: 12 },
   confirmTitle: { fontFamily: 'Inter_600SemiBold', color: brand.text, fontSize: 18 },
   confirmMessage: { fontFamily: 'Inter_400Regular', color: brand.muted, fontSize: 13, lineHeight: 19 },
-  confirmActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 6 },
+  confirmActions: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 10, marginTop: 6 },
   confirmSecondary: { minHeight: 48, borderRadius: 11, paddingHorizontal: 15, justifyContent: 'center', backgroundColor: brand.petroleumLight },
   confirmSecondaryText: { fontFamily: 'Inter_600SemiBold', color: brand.petroleum, fontSize: 13 },
   confirmPrimary: { minHeight: 48, borderRadius: 11, paddingHorizontal: 15, justifyContent: 'center', backgroundColor: brand.petroleum },

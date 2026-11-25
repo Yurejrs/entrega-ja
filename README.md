@@ -2,6 +2,13 @@
 
 Monólito modular em Node.js 26, TypeScript e Fastify. Atende o painel da empresa, o aplicativo Android e o painel administrativo SaaS por `/v1`. O contrato OpenAPI é servido em `/docs` e `/docs/json`. As migrações PostgreSQL ficam em `db/migrations`.
 
+## Instalação e operação da versão 1.0.0
+
+- [Instalação, configuração e atualização](docs/instalacao.md)
+- [Backup e restauração](docs/backup-restauracao.md)
+- [Evidências de recuperação](docs/backup-restore-test.md)
+- [Preparação da versão oficial](docs/release-1.0.0.md)
+
 ## Desenvolvimento local
 
 1. Instale Node.js 26 e pnpm 11.
@@ -50,16 +57,16 @@ Os links de convite e recuperação são retornados ao administrador para entreg
 
 ## Clientes em desenvolvimento
 
-A Gestão Web fica em `apps/web` e o aplicativo Android em `apps/mobile`. Execute a API e `pnpm dev:web` para abrir o painel local. Execute `pnpm dev:mobile` para iniciar o Expo. O emulador Android acessa a API em `http://10.0.2.2:3000`; para aparelho físico, configure `extra.apiUrl` em `apps/mobile/app.json` com o IP da máquina na rede. Ambos usam as cores e a tipografia da pasta `Identidade`.
+A Gestão Web fica em `apps/web` e o aplicativo Android em `apps/mobile`. Execute a API e `pnpm dev:web` para abrir o painel local. Execute `pnpm dev:mobile` para iniciar o Expo. O emulador Android acessa a API em `http://10.0.2.2:3000`; para aparelho físico, configure o endereço pela tela **Configurações** do app ou por `EXPO_PUBLIC_API_URL` no build. Builds release exigem HTTPS e desativam tráfego HTTP sem TLS; o manifesto de debug mantém HTTP para desenvolvimento. Ambos usam as cores e a tipografia da pasta `Identidade`.
 
-A Gestão Web oferece autenticação, MFA, convites e operações de empresa e SaaS. O painel acompanha entregas por status e por dia, semana ou mês; a lista tem abas de entregas em aberto e finalizadas, com atrasadas incluídas no dia selecionado. Em Endereços, a empresa pode importar ruas e localidades próximas do OpenStreetMap. A seção Volumes mantém um catálogo com ícone e nome, com opções prontas para feira, gás e água; o formulário de nova entrega abre em um cartão modal e permite anexar volumes e quantidades, escolher endereço salvo ou cadastrar outro na mesma operação. Entregas também podem ficar disponíveis para o primeiro entregador que as aceitar; a confirmação é transacional na API. O aplicativo mantém cache SQLite e fila local para check-in, problema e conclusão com foto, além do perfil do entregador e do progresso de entregas concluídas. Rotas com várias paradas compartilham localização em segundo plano e mostram posição, trilha e destino na Gestão Web enquanto estiverem ativas. Com o app aberto, o Android verifica novas entregas a cada 30 segundos e mostra um aviso local. Com o app fechado, o envio depende do Firebase Cloud Messaging: exige `google-services.json`, `FCM_PROJECT_ID`, credencial do Firebase Admin SDK e o worker ativo; sem esses dados os alertas remotos não podem ser enviados. A validação em aparelho físico ainda está pendente.
+A Gestão Web oferece autenticação, MFA, convites e operações de empresa e SaaS. O painel acompanha entregas por status e por dia, semana ou mês; a lista tem abas de entregas em aberto e finalizadas, com atrasadas incluídas no dia selecionado. Em Endereços, a empresa pode importar ruas e localidades próximas do OpenStreetMap. A seção Volumes mantém um catálogo com ícone e nome, com opções prontas para feira, gás e água; o formulário de nova entrega abre em um cartão modal e permite anexar volumes e quantidades, escolher endereço salvo ou cadastrar outro na mesma operação. Entregas também podem ficar disponíveis para o primeiro entregador que as aceitar; a confirmação é transacional na API. O aplicativo mantém cache SQLite e fila local para check-in, problema e conclusão com foto, além do perfil do entregador e do progresso de entregas concluídas. Rotas com várias paradas compartilham localização em segundo plano e mostram posição, trilha e destino na Gestão Web enquanto estiverem ativas. Com o app aberto, o Android verifica novas entregas a cada 30 segundos e mostra um aviso local. Com o app fechado, o envio depende do Firebase Cloud Messaging: exige `google-services.json`, `FCM_PROJECT_ID`, credencial do Firebase Admin SDK e o worker ativo; sem esses dados os alertas remotos não podem ser enviados. Check-in offline, conclusão com foto e GPS com tela bloqueada foram validados em aparelho físico, com os limites registrados em `docs/teste-android.md`.
 
 ### APK de release
 
-O artefato `releases/entrega-ja-android-v1.0.0-beta.1.apk` ainda não foi publicado. Ele só deve ser gerado depois de cumprir [docs/release-1.0.0.md](docs/release-1.0.0.md), usando Node 26, JDK 17, Android SDK homologado e uma keystore de produção armazenada fora do repositório.
+A release `1.0.0` está registrada pelo commit e pela tag `v1.0.0`. O APK assinado para distribuição ainda não foi gerado: depende de Node 26, JDK 17, Android SDK homologado, URL HTTPS de produção e da keystore descrita em [docs/release-1.0.0.md](docs/release-1.0.0.md). O build de homologação já instalado permanece disponível (`1.0.0-beta.1.1`, `versionCode 24`), com a URL da API configurável na tela **Configurações**; nenhum novo APK foi gerado nesta release.
 
-Os APKs de desenvolvimento anteriores não fazem parte da release 1.0.0-beta.1 e não devem ser usados no piloto. Para gerar e validar o APK atual, use o script de smoke test depois que o artefato for publicado.
+Os APKs de desenvolvimento e o APK de QA assinado com chave temporária não devem ser publicados. Depois de gerar o artefato oficial, valide-o com o script de smoke test.
 
-Com um aparelho Android ou emulador autorizado no ADB, execute `ADB_BIN=/caminho/para/adb ./scripts/smoke-android.sh` para instalar o APK `v1.0.0-beta.1`, iniciar o aplicativo e detectar uma falha imediata de abertura. O início, a navegação principal e a entrada no modo de seleção de rota foram verificados no emulador Android 36; ainda falta validar manualmente em aparelho físico o GPS com tela bloqueada, a sincronização offline, check-in, problema e conclusão com foto. Para notificações com o app fechado, são necessários o arquivo Firebase Android, as credenciais do Firebase Admin SDK e o worker ativo; com o app aberto, a verificação periódica mostra um aviso local.
+Com um aparelho Android ou emulador autorizado no ADB, execute `ADB_BIN=/caminho/para/adb ./scripts/smoke-android.sh` para instalar o APK `v1.0.0`, iniciar o aplicativo e detectar uma falha imediata de abertura. O início, a navegação principal e a entrada no modo de seleção de rota foram verificados no emulador Android 36. Check-in offline, conclusão com foto e GPS com tela bloqueada foram validados em aparelho físico, com os limites registrados em `docs/teste-android.md`. Para notificações com o app fechado, são necessários o arquivo Firebase Android, as credenciais do Firebase Admin SDK e o worker ativo; com o app aberto, a verificação periódica mostra um aviso local.
 
 O roteiro de aceite no aparelho, com resultados esperados para reinício offline, check-in e conclusão com foto, está em `docs/teste-android.md`.

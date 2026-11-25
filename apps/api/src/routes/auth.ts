@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { ApiConfig } from '../config.js';
 import type { DbPools } from '../db.js';
-import { acceptInvite, authenticate, login, setSessionCookie, startMfa, verifyMfa } from '../auth.js';
+import { acceptInvite, authenticate, inviteDetails, login, setSessionCookie, startMfa, verifyMfa } from '../auth.js';
 import { badRequest } from '../errors.js';
 import { newToken, sha256 } from '../security.js';
 
@@ -57,11 +57,17 @@ export function registerAuthRoutes(app: FastifyInstance, pools: DbPools, config:
     return verifyMfa(pools, session, code, config);
   });
 
+  app.get('/v1/auth/invites/:token', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+    schema: { tags: ['auth'], params: { type: 'object', required: ['token'], properties: { token: { type: 'string', minLength: 20, maxLength: 200 } } } } }, async request => {
+    const { token } = request.params as { token: string };
+    return inviteDetails(pools, token);
+  });
+
   app.post('/v1/auth/invites/accept', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
     schema: { tags: ['auth'], body: { type: 'object', required: ['token','password'],
-    properties: { token: { type: 'string' }, password: { type: 'string', minLength: 8 } }, additionalProperties: false } } }, async request => {
-    const { token, password } = request.body as { token: string; password: string };
-    await acceptInvite(pools, token, password);
+    properties: { token: { type: 'string' }, password: { type: 'string', minLength: 8 }, mfaCode: { type: 'string', minLength: 6, maxLength: 32 } }, additionalProperties: false } } }, async request => {
+    const { token, password, mfaCode } = request.body as { token: string; password: string; mfaCode?: string };
+    await acceptInvite(pools, token, password, mfaCode, config);
     return { ok: true };
   });
 }

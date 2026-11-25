@@ -13,3 +13,5 @@ apps/mobile/android/app/google-services.json
 **/*.jks
 **/*.p12
 releases/*.apk
+
+backups/

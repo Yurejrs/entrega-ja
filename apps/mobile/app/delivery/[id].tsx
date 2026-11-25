@@ -1,7 +1,8 @@
+import { AppAlert as Alert } from '../../src/AppFeedback';
 import { FacadeCard } from '../../src/FacadeCard';
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Alert, Image, Linking, Modal, Pressable, ScrollView, StatusBar, StyleSheet, Text, Vibration,
+   Image, Linking, Modal, Pressable, ScrollView, StatusBar, StyleSheet, Text, Vibration,
   TextInput, View, useWindowDimensions,
 } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
@@ -104,7 +105,7 @@ export default function Detail() {
   const coords = mapCoordinates(item?.reference_latitude ?? destination.reference_latitude,
     item?.reference_longitude ?? destination.reference_longitude);
   const syncedCheckIn = mapCoordinates(item?.last_check_in_latitude, item?.last_check_in_longitude);
-  const localCheckIn = item ? [...operations(), ...failedOperations()]
+  const localCheckIn = item ? operations()
     .filter(operation => operation.delivery_id === item.id && operation.kind === 'check_in')
     .reverse()
     .map(operation => {
@@ -270,7 +271,7 @@ export default function Detail() {
         ? ` Distância aproximada até o endereço: ${Math.round(measuredDistanceM)} m.` : '';
       Alert.alert(kind === 'completion' && !pending ? 'Entrega concluída' : pending ? 'Salvo no aparelho' : 'Enviado', pending
         ? `A operação será enviada quando houver conexão.${distanceHint}`
-        : `A operação foi registrada na API.${distanceHint}`);
+        : `Registro enviado com sucesso.${distanceHint}`);
       if (kind === 'completion' && !pending) router.back();
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Confira os dados e tente novamente.';
@@ -382,8 +383,8 @@ export default function Detail() {
         <View style={detailStyles.card}><Text style={detailStyles.sectionTitle}>Para concluir</Text><Text style={detailStyles.infoText}>{checkInPoint ? '✓ Check-in no local' : '○ Check-in no local'}</Text><Text style={detailStyles.infoText}>{proofCount > 0 ? '✓ Foto da entrega registrada' : '○ Adicionar foto da entrega'}</Text></View>
         {!active && <Text style={detailStyles.closedHint}>Esta entrega não permite novas operações.</Text>}
       </ScrollView>
-      </SafeAreaView>
       {active && <View style={detailStyles.footer}><Text style={detailStyles.footerHint}>{!checkInPoint ? 'Faça o check-in no local para concluir.' : proofCount === 0 ? 'Adicione uma foto da entrega para concluir.' : ''}</Text><Pressable style={[sharedStyles.primaryButton, !hasRequiredCompletionData && detailStyles.disabledButton]} accessibilityRole="button" accessibilityState={{ disabled: !hasRequiredCompletionData }} disabled={!hasRequiredCompletionData || busy} onPress={() => setConfirmation('completion')}><Text style={sharedStyles.primaryButtonText}>Concluir entrega</Text></Pressable></View>}
+      </SafeAreaView>
       {!!toast && <View style={detailStyles.toast}><Text style={detailStyles.toastText}>{toast}</Text></View>}
 
       <Modal visible={problemOpen} transparent animationType="slide" onRequestClose={() => setProblemOpen(false)}>
@@ -421,7 +422,7 @@ const detailStyles = StyleSheet.create({
   page: { flex: 1, backgroundColor: '#F4F7F8' },
   content: { padding: 20, paddingBottom: 36, gap: 12 },
   inlineActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' },
-  smallButton: { minHeight: 44, borderWidth: 1, borderColor: '#C5D2D7', borderRadius: 12, paddingHorizontal: 12, justifyContent: 'center' },
+  smallButton: { minHeight: 48, borderWidth: 1, borderColor: '#C5D2D7', borderRadius: 12, paddingHorizontal: 12, justifyContent: 'center' },
   errorBox: { backgroundColor: '#FFF3D6', borderRadius: 12, padding: 10, gap: 5 },
   errorText: { fontFamily: 'Inter_400Regular', color: '#5A4200', lineHeight: 18 },
   back: { alignSelf: 'flex-start', marginBottom: 2 },
@@ -429,7 +430,7 @@ const detailStyles = StyleSheet.create({
   customer: { fontFamily: 'Inter_600SemiBold', fontSize: 25, lineHeight: 32, color: '#12202A' },
   status: { alignSelf: 'flex-start', fontFamily: 'Inter_600SemiBold', color: '#0F4C5C', backgroundColor: '#D9E8EB', overflow: 'hidden', borderRadius: 18, paddingHorizontal: 12, paddingVertical: 6 },
   card: { backgroundColor: '#FFFFFF', borderRadius: 14, padding: 16, gap: 8 },
-  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
+  sectionHeader: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
   sectionTitle: { fontFamily: 'Inter_600SemiBold', fontSize: 17, color: '#12202A', marginBottom: 2 },
   addressLabel: { fontFamily: 'Inter_500Medium', fontSize: 14, color: '#6B7C87' },
   addressLine: { fontFamily: 'Inter_500Medium', fontSize: 15, lineHeight: 22, color: '#263C46' },
@@ -456,7 +457,7 @@ const detailStyles = StyleSheet.create({
   phoneButtonText: { fontFamily: 'Inter_600SemiBold', color: '#0F4C5C' },
   dangerButton: { minHeight: 48, borderWidth: 1, borderColor: '#D9A3A3', borderRadius: 12, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
   dangerButtonText: { fontFamily: 'Inter_600SemiBold', color: '#8A1C1C' },
-  footer: { position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: '#FFFFFF', borderTopWidth: 1, borderTopColor: '#DDE5E8', paddingHorizontal: 20, paddingTop: 8, paddingBottom: 10, gap: 5 },
+  footer: { backgroundColor: '#FFFFFF', borderTopWidth: 1, borderTopColor: '#DDE5E8', paddingHorizontal: 20, paddingTop: 8, paddingBottom: 10, gap: 5 },
   footerHint: { fontFamily: 'Inter_400Regular', color: '#46565E', fontSize: 12, minHeight: 16 },
   disabledButton: { opacity: 0.45 },
   toast: { position: 'absolute', left: 20, right: 20, bottom: 92, backgroundColor: '#0B4F2E', borderRadius: 12, padding: 12, alignItems: 'center' },

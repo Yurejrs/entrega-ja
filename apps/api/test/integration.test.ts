@@ -58,6 +58,7 @@ test('full API flow with real PostgreSQL roles', async () => {
   try {
     await app.ready();
     const openapi = app.swagger();
+    assert.equal(openapi.info?.version, '1.0.0');
     assert.ok(openapi.paths?.['/auth/login']);
     assert.ok(openapi.paths?.['/deliveries']);
     assert.ok(openapi.paths?.['/mobile/location-consent']);
@@ -314,6 +315,8 @@ test('full API flow with real PostgreSQL roles', async () => {
     ]);
     const captured=await app.inject({method:'PUT',url:facadePath,headers:uploadHeaders,payload:facadePayload});
     assert.equal(captured.statusCode,200,captured.body);
+    const repeatedFacade=await app.inject({method:'PUT',url:facadePath,headers:uploadHeaders,payload:facadePayload});
+    assert.equal(repeatedFacade.statusCode,200,repeatedFacade.body);
     const laterFacade=()=>call(app,'GET',`/v1/deliveries/${future.data.id}/facade`,undefined,courier);
     assert.equal((await laterFacade()).data.capture,false);
     assert.match((await laterFacade()).data.image,/^data:image\/jpeg/);
@@ -687,7 +690,9 @@ test('full API flow with real PostgreSQL roles', async () => {
     const reset = await call(app,'POST',`/v1/platform/admins/${platformUser.rows[0]!.id}/password-reset`,{},pendingSession);
     assert.equal(reset.status,201,JSON.stringify(reset.data));
     assert.equal((await call(app,'POST','/v1/auth/invites/accept',
-      {token:reset.data.token,password:'new-platform-password-123'})).status,200);
+      {token:reset.data.token,password:'new-platform-password-123'})).status,401);
+    assert.equal((await call(app,'POST','/v1/auth/invites/accept',
+      {token:reset.data.token,password:'new-platform-password-123',mfaCode:platform.recoveryCodes![1]})).status,200);
     assert.equal((await call(app,'GET','/v1/auth/me',undefined,pendingSession)).status,401);
   } finally {
     await app.close();

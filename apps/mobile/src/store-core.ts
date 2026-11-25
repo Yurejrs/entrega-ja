@@ -10,7 +10,7 @@ export interface StoreDatabase {
 }
 
 export type Operation = {
-  id: string; delivery_id: string; kind: 'check_in' | 'problem' | 'completion' | 'photo' | 'note';
+  id: string; delivery_id: string; kind: 'check_in' | 'problem' | 'completion' | 'photo' | 'note' | 'facade';
   payload: string; status: string; error: string | null;
 };
 
@@ -34,6 +34,10 @@ export function createStore(db: StoreDatabase, createId: () => string) {
 
   function getMeta(key: string): string | undefined {
     return db.getFirstSync<{ value: string }>('SELECT value FROM metadata WHERE key=?', key)?.value;
+  }
+
+  function recordLocationDiagnostic(stage:string, detail?:string) {
+    db.runSync('INSERT OR REPLACE INTO metadata(key,value) VALUES (?,?)','locationDiagnostic',JSON.stringify({stage,detail,at:new Date().toISOString()}));
   }
 
   function prepareAccount(accountKey: string): void {
@@ -116,13 +120,16 @@ export function createStore(db: StoreDatabase, createId: () => string) {
     if(value===null)db.runSync('DELETE FROM work_shifts WHERE account=?',account);
     else db.runSync('INSERT OR REPLACE INTO work_shifts(account,value) VALUES (?,?)',account,value);
   }
+  function cacheFacade(id:string,value:string) {
+    db.runSync('INSERT OR REPLACE INTO metadata(key,value) VALUES (?,?)','facade:'+id,value);
+  }
   function cacheProofCount(id:string,count:number) {
     db.runSync('INSERT OR REPLACE INTO metadata(key,value) VALUES (?,?)', 'proofCount:'+id,String(count));
   }
   function cacheRouteOverview(value:string) {
     db.runSync("INSERT OR REPLACE INTO metadata(key,value) VALUES ('routeOverview',?)",value);
   }
-  return { deliveries, getMeta, getShiftState, setShiftState, cacheProofCount, cacheRouteOverview, prepareAccount, enqueue, operations, failedOperations,
+  return { deliveries, getMeta, recordLocationDiagnostic, cacheFacade, getShiftState, setShiftState, cacheProofCount, cacheRouteOverview, prepareAccount, enqueue, operations, failedOperations,
     clearFailed, complete, fail, retryFailed, applySync, reset, queueRoutePoint, routePoints, removeRoutePoints, discardRoutePoints,
     queueLivePoint, liveLocationPoints, removeLiveLocationPoints, discardLiveLocationPoints };
 }

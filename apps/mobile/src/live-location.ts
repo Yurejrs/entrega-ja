@@ -3,20 +3,31 @@ import * as TaskManager from 'expo-task-manager';
 import * as SecureStore from 'expo-secure-store';
 import { randomUUID } from 'expo-crypto';
 import { request } from './api';
-import { liveLocationPoints, queueLivePoint, removeLiveLocationPoints, discardLiveLocationPoints, discardRoutePoints } from './store';
+import { liveLocationPoints, queueLivePoint, removeLiveLocationPoints, discardLiveLocationPoints, discardRoutePoints, recordLocationDiagnostic } from './store';
 import { drainRoutePoints } from './route-sync-core';
-import { sendRouteLocations, stopLegacyRouteGPS } from './route-tracking';
+import { flushRoutePoints, sendRouteLocations, stopLegacyRouteGPS } from './route-tracking';
 import { activeShift, currentShift, markOpening, saveShift, syncExit } from './work-shift';
 
 const TASK='entregaja-live-location';
 let flushing:Promise<void>|null=null;
+let startingGPS:Promise<void>|null=null;
 
 async function startGPS() {
-  if(await Location.hasStartedLocationUpdatesAsync(TASK))return;
-  if(!activeShift())return;
-  await Location.startLocationUpdatesAsync(TASK,{accuracy:Location.Accuracy.Balanced,timeInterval:15000,distanceInterval:25,
-    pausesUpdatesAutomatically:false,showsBackgroundLocationIndicator:true,foregroundService:{
-      notificationTitle:'Turno em andamento',notificationBody:'Sua localização é compartilhada até você registrar a saída.',notificationColor:'#0F4C5C'}});
+  if(startingGPS)return startingGPS;
+  const start=(async()=>{
+    if(!activeShift())return;
+    // Android may retain the Expo task registration while its fused-location
+    // listener has gone stale (for example after process/OS backgrounding).
+    // Re-register on each explicit start/resume so the native request is live.
+    if(await Location.hasStartedLocationUpdatesAsync(TASK))await Location.stopLocationUpdatesAsync(TASK);
+    if(!activeShift())return;
+    await Location.startLocationUpdatesAsync(TASK,{accuracy:Location.Accuracy.Balanced,timeInterval:15000,distanceInterval:0,
+      pausesUpdatesAutomatically:false,showsBackgroundLocationIndicator:true,foregroundService:{
+        notificationTitle:'Turno em andamento',notificationBody:'Sua localização é compartilhada até você registrar a saída.',notificationColor:'#0F4C5C'}});
+    if(!activeShift())await stopGPS();
+  })();
+  startingGPS=start.finally(()=>{startingGPS=null;});
+  return startingGPS;
 }
 async function stopGPS() {
   if(await Location.hasStartedLocationUpdatesAsync(TASK))await Location.stopLocationUpdatesAsync(TASK);
@@ -31,16 +42,27 @@ async function flushLiveLocations(id:string) {
   try {await flushing;} finally {flushing=null;}
 }
 
+export async function syncLocationPoints() {
+  const shift=activeShift();
+  if(!shift)return;
+  const routeId=await SecureStore.getItemAsync('activeRouteId');
+  await Promise.all([flushLiveLocations(shift.id),routeId?flushRoutePoints(routeId):undefined]);
+}
+
 TaskManager.defineTask(TASK,async({data,error})=>{
+  recordLocationDiagnostic('received',error?.message);
   const shift=activeShift();
   if(!shift){await stopGPS();return;}
   if(error||!data)return;
+  recordLocationDiagnostic('reading-route');
   const routeId=await SecureStore.getItemAsync('activeRouteId');
   if(activeShift()?.id!==shift.id)return;
   const locations=(data as {locations:Location.LocationObject[]}).locations.filter(l=>l.timestamp>=Date.parse(shift.startedAt));
   for(const l of locations)queueLivePoint({clientPointId:randomUUID(),latitude:l.coords.latitude,longitude:l.coords.longitude,
     accuracyM:l.coords.accuracy??0,capturedAt:new Date(l.timestamp).toISOString()});
+  recordLocationDiagnostic('sending',String(locations.length));
   const [sent]=await Promise.allSettled([flushLiveLocations(shift.id),routeId?sendRouteLocations(routeId,locations,shift.id):undefined]);
+  recordLocationDiagnostic(sent.status==='fulfilled'?'sent':'pending',sent.status==='rejected'?String(sent.reason?.message??'Falha de conexão'):undefined);
   if(sent.status==='rejected' && [401,409].includes(sent.reason?.status) && activeShift()?.id===shift.id)await stopLiveLocation();
 });
 
@@ -72,6 +94,9 @@ export async function stopLiveLocation() {
 }
 export async function resumeLiveLocation() {
   await stopLegacyRouteGPS();
-  if(activeShift())await startGPS();
+  if(activeShift()){
+    await startGPS();
+    await syncLocationPoints();
+  }
   else {await stopGPS();await syncExit();}
 }

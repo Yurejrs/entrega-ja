@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  expo-location@19.0.8: 79aa07098763a96735b69ecb6e4dcfef1d2300c22022232ca4924110cbd21e37
+
 importers:
 
   .: {}
@@ -85,7 +88,7 @@ importers:
         version: 17.0.11(expo@54.0.38)
       expo-location:
         specifier: ~19.0.0
-        version: 19.0.8(expo@54.0.38)
+        version: 19.0.8(patch_hash=79aa07098763a96735b69ecb6e4dcfef1d2300c22022232ca4924110cbd21e37)(expo@54.0.38)
       expo-notifications:
         specifier: ~0.32.0
         version: 0.32.17(expo@54.0.38)(react-native@0.81.5(@babel/core@7.29.13(supports-color@8.1.1))(@types/react@19.1.17)(react@19.1.0)(supports-color@8.1.1))(react@19.1.0)(supports-color@8.1.1)(typescript@5.9.3)
@@ -7465,7 +7468,7 @@ snapshots:
       - expo
       - supports-color
 
-  expo-location@19.0.8(expo@54.0.38):
+  expo-location@19.0.8(patch_hash=79aa07098763a96735b69ecb6e4dcfef1d2300c22022232ca4924110cbd21e37)(expo@54.0.38):
     dependencies:
       expo: 54.0.38(@babel/core@7.29.13(supports-color@8.1.1))(@expo/metro-runtime@6.1.2)(expo-router@6.0.24)(react-native@0.81.5(@babel/core@7.29.13(supports-color@8.1.1))(@types/react@19.1.17)(react@19.1.0)(supports-color@8.1.1))(react@19.1.0)(supports-color@8.1.1)(typescript@5.9.3)
 

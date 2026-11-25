@@ -5,3 +5,5 @@ allowBuilds:
   argon2: true
   esbuild: true
   protobufjs: true
+patchedDependencies:
+  expo-location@19.0.8: patches/expo-location@19.0.8.patch

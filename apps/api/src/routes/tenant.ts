@@ -225,7 +225,7 @@ export function registerTenantRoutes(app: FastifyInstance, pools: DbPools, confi
         LEFT JOIN LATERAL (SELECT latitude,longitude,received_at FROM app.courier_locations l
           WHERE l.courier_membership_id=s.courier_membership_id AND l.captured_at>=s.started_at AND l.accuracy_m<=$1 ORDER BY l.captured_at DESC LIMIT 1) last ON true
         WHERE s.status='active' ORDER BY u.full_name`,[config.gpsLowPrecisionThresholdM]);
-      const summary = await client.query<{ day: string; week: string; month: string }>(`WITH clock AS (
+      const summary = await client.query<{ day: string; week: string; month: string; previous_day: string; previous_week: string; previous_month: string }>(`WITH clock AS (
           SELECT (now() AT TIME ZONE 'America/Fortaleza')::date AS today,
             date_trunc('week',now() AT TIME ZONE 'America/Fortaleza')::date AS week_start,
             date_trunc('month',now() AT TIME ZONE 'America/Fortaleza')::date AS month_start
@@ -235,7 +235,13 @@ export function registerTenantRoutes(app: FastifyInstance, pools: DbPools, confi
           count(*) FILTER (WHERE d.created_at >= c.week_start::timestamp AT TIME ZONE 'America/Fortaleza'
             AND d.created_at < (c.today+1)::timestamp AT TIME ZONE 'America/Fortaleza')::text AS week,
           count(*) FILTER (WHERE d.created_at >= c.month_start::timestamp AT TIME ZONE 'America/Fortaleza'
-            AND d.created_at < (c.today+1)::timestamp AT TIME ZONE 'America/Fortaleza')::text AS month
+            AND d.created_at < (c.today+1)::timestamp AT TIME ZONE 'America/Fortaleza')::text AS month,
+          count(*) FILTER (WHERE d.created_at >= (c.today-1)::timestamp AT TIME ZONE 'America/Fortaleza'
+            AND d.created_at < c.today::timestamp AT TIME ZONE 'America/Fortaleza')::text AS previous_day,
+          count(*) FILTER (WHERE d.created_at >= (c.week_start-7)::timestamp AT TIME ZONE 'America/Fortaleza'
+            AND d.created_at < c.week_start::timestamp AT TIME ZONE 'America/Fortaleza')::text AS previous_week,
+          count(*) FILTER (WHERE d.created_at >= (c.month_start-interval '1 month') AT TIME ZONE 'America/Fortaleza'
+            AND d.created_at < c.month_start::timestamp AT TIME ZONE 'America/Fortaleza')::text AS previous_month
         FROM app.deliveries d CROSS JOIN clock c`);
       const series = await client.query<{ label: string; count: number }>(`WITH clock AS (
           SELECT (now() AT TIME ZONE 'America/Fortaleza')::date AS today,
@@ -262,7 +268,8 @@ export function registerTenantRoutes(app: FastifyInstance, pools: DbPools, confi
         GROUP BY b.starts_at ORDER BY b.starts_at`,[period]);
       return { byStatus: Object.fromEntries(counts.rows.map(row => [row.status,Number(row.count)])),
         unseen: Number(unseen.rows[0]!.count),
-        summary: Object.fromEntries(Object.entries(summary.rows[0]!).map(([key,value]) => [key,Number(value)])),
+        summary: Object.fromEntries(Object.entries(summary.rows[0]!).filter(([key]) => !key.startsWith('previous_')).map(([key,value]) => [key,Number(value)])),
+        comparison: { day: Number(summary.rows[0]!.previous_day), week: Number(summary.rows[0]!.previous_week), month: Number(summary.rows[0]!.previous_month) },
         series: { period, items: series.rows }, liveCouriers: liveCouriers.rows,
         worker: { status: workerStatus, lastTickAt: heartbeat?.last_tick_at ?? null, lastSuccessAt: heartbeat?.last_success_at ?? null, lastError: heartbeat?.last_error ?? null, pending: Number(workerQueue.rows[0]!.count) } };
     });

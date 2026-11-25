@@ -1,8 +1,13 @@
 {
   "name": "@entregas/mobile",
-  "version": "1.0.0-beta.1.1",
+  "version": "1.0.0",
   "private": true,
   "main": "expo-router/entry",
+  "expo": {
+    "autolinking": {
+      "android": { "buildFromSource": ["expo-location"] }
+    }
+  },
   "scripts": {
     "start": "expo start",
     "android": "expo run:android",

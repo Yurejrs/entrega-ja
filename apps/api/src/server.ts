@@ -23,7 +23,7 @@ export async function buildServer(config: ApiConfig, injectedPools?: DbPools) {
   await app.register(cookie);
   await app.register(rateLimit, { global: false });
   await app.register(multipart, { limits: { fileSize: 8 * 1024 * 1024, files: 1 } });
-  await app.register(swagger, { openapi: { info: { title: 'API Entregas', version: '1.0.0-beta.1' },
+  await app.register(swagger, { openapi: { info: { title: 'API Entregas', version: '1.0.0' },
     servers: [{ url: '/v1' }], tags: ['auth','platform','tenant','deliveries','mobile','files'].map(name => ({ name })) } });
   await app.register(swaggerUi, { routePrefix: '/docs' });
 

@@ -1,0 +1,55 @@
+diff --git a/android/src/main/java/expo/modules/location/taskConsumers/LocationTaskConsumer.kt b/android/src/main/java/expo/modules/location/taskConsumers/LocationTaskConsumer.kt
+index e6592852ba2fcd97dcceee0ebd525fb5e5d68c7f..76904d96e20c068ed6a51682e418a418b2063cd2 100644
+--- a/android/src/main/java/expo/modules/location/taskConsumers/LocationTaskConsumer.kt
++++ b/android/src/main/java/expo/modules/location/taskConsumers/LocationTaskConsumer.kt
+@@ -12,6 +12,7 @@ import android.os.Build
+ import android.os.Bundle
+ import android.os.IBinder
+ import android.os.PersistableBundle
++import android.os.PowerManager
+ import android.util.Log
+ import com.google.android.gms.location.FusedLocationProviderClient
+ import com.google.android.gms.location.LocationRequest
+@@ -245,6 +246,7 @@ class LocationTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtilsI
+     }
+     val context = context.applicationContext
+     val data: MutableList<PersistableBundle> = ArrayList()
++    val foregroundLocations = ArrayList<Bundle>()
+     for (location in mDeferredLocations) {
+       val timestamp = location.time
+ 
+@@ -253,6 +255,7 @@ class LocationTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtilsI
+       if (timestamp > sLastTimestamp) {
+         val bundle = LocationResponse(location).toBundle(PersistableBundle::class.java)
+         data.add(bundle)
++        foregroundLocations.add(LocationResponse(location).toBundle(Bundle::class.java))
+         sLastTimestamp = timestamp
+       }
+     }
+@@ -262,8 +265,24 @@ class LocationTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtilsI
+       mDeferredDistance = 0.0
+       mDeferredLocations.clear()
+ 
+-      // Schedule new job.
+-      taskManagerUtils.scheduleJob(context, mTask, data)
++      // A user-started foreground service already owns this work. Dispatch its
++      // locations directly instead of waiting for JobScheduler, which may defer
++      // jobs under thermal/battery restrictions even while the service runs.
++      if (mService != null && shouldUseForegroundService(mTask?.options ?: emptyMap())) {
++        val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
++        val wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "expo:foreground-location-dispatch")
++        wakeLock.acquire(30_000L)
++        try {
++          executeTaskWithLocationBundles(foregroundLocations) {
++            if (wakeLock.isHeld) wakeLock.release()
++          }
++        } catch (error: Exception) {
++          if (wakeLock.isHeld) wakeLock.release()
++          taskManagerUtils.scheduleJob(context, mTask, data)
++        }
++      } else {
++        taskManagerUtils.scheduleJob(context, mTask, data)
++      }
+     }
+   }
+ 

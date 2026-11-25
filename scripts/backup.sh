@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 command -v pg_dump >/dev/null 2>&1 || {
   echo 'pg_dump é obrigatório no ambiente de backup; instale o cliente PostgreSQL antes de executar.' >&2
@@ -18,11 +19,14 @@ fi
 
 backup_root="${BACKUP_DIR:-./backups}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-target="$backup_root/entregaja-$timestamp"
-mkdir -p "$target"
+mkdir -p "$backup_root"
+target="$(mktemp -d "$backup_root/entregaja-$timestamp-XXXXXX.partial")"
+trap 'echo "Backup incompleto em $target" >&2' ERR
 
-pg_dump --format=custom --no-owner --no-acl --file="$target/database.dump" "$BACKUP_DATABASE_URL"
+pg_dump --format=custom --no-owner --file="$target/database.dump" "$BACKUP_DATABASE_URL"
 tar --create --file="$target/private-files.tar" --sort=name --directory="$FILE_STORAGE_DIR" .
-sha256sum "$target/database.dump" "$target/private-files.tar" > "$target/SHA256SUMS"
+(cd "$target" && sha256sum database.dump private-files.tar > SHA256SUMS)
+mv "$target" "${target%.partial}"
+target="${target%.partial}"
 chmod 600 "$target/database.dump" "$target/private-files.tar" "$target/SHA256SUMS"
 printf 'Backup criado em %s\n' "$target"

@@ -1,3 +1,4 @@
+import { AppFeedback } from '../src/AppFeedback';
 import { Stack } from 'expo-router';
 import { useFonts, Inter_400Regular, Inter_500Medium, Inter_600SemiBold } from '@expo-google-fonts/inter';
 import { StatusBar } from 'react-native';
@@ -21,6 +22,7 @@ export default function Layout() {
         <Stack.Screen name="index" options={{ title: 'Entrega Já' }} />
         <Stack.Screen name="delivery/[id]" options={{ title: 'Detalhes da entrega' }} />
       </Stack>
+      <AppFeedback/>
     </SafeAreaProvider>
   );
 }

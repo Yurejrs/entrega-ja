@@ -26,12 +26,24 @@ cd "$root_dir"
 pnpm --filter @entregas/mobile build:android:release
 
 apk="$root_dir/apps/mobile/android/app/build/outputs/apk/release/app-release.apk"
-destination="$root_dir/releases/entrega-ja-android-v1.0.0-beta.1.1.apk"
+destination="$root_dir/releases/entrega-ja-android-v1.0.0.apk"
 mkdir -p "$root_dir/releases"
-aapt dump badging "$apk" | grep -Fq "package: name='com.kynesis.entregaja' versionCode='24' versionName='1.0.0-beta.1.1'" \
+aapt dump badging "$apk" | grep -Fq "package: name='com.kynesis.entregaja' versionCode='25' versionName='1.0.0'" \
   || { echo 'APK não corresponde ao pacote/versão esperados.' >&2; exit 1; }
 apksigner verify --verbose "$apk" | grep -Fq 'Verified using v2 scheme (APK Signature Scheme v2): true' \
   || { echo 'APK não passou na assinatura v2.' >&2; exit 1; }
+manifest="$(aapt dump xmltree "$apk" AndroidManifest.xml)"
+grep -Fq 'usesCleartextTraffic(0x010104ec)=(type 0x12)0x0' <<<"$manifest" \
+  || { echo 'O manifesto do APK precisa desativar tráfego HTTP sem TLS.' >&2; exit 1; }
+app_config="$(unzip -p "$apk" assets/app.config)"
+EXPO_APP_CONFIG="$app_config" EXPO_EXPECTED_API_URL="$EXPO_PUBLIC_API_URL" node -e '
+  const config = JSON.parse(process.env.EXPO_APP_CONFIG);
+  const expected = process.env.EXPO_EXPECTED_API_URL;
+  if (config.extra?.apiUrl !== expected || !expected.startsWith("https://")) {
+    console.error("A URL HTTPS configurada não foi incorporada ao APK.");
+    process.exit(1);
+  }
+'
 cp "$apk" "$destination"
 sha256sum "$destination" > "$root_dir/releases/SHA256SUMS"
 chmod 0644 "$destination" "$root_dir/releases/SHA256SUMS"
